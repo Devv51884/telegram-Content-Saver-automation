@@ -19,9 +19,7 @@ YOUTUBE_CHANNEL = os.getenv('YOUTUBE_CHANNEL', 'https://www.youtube.com/@Code_De
 
 OWNER_ID = int(os.getenv('OWNER_ID', '0'))
 ADMINS_RAW = os.getenv('ADMIN_IDS', '').strip()
-ADMIN_IDS = {
-    int(x.strip()) for x in ADMINS_RAW.split(',') if x.strip().isdigit()
-}
+ADMIN_IDS = {int(x.strip()) for x in ADMINS_RAW.split(',') if x.strip().isdigit()}
 if OWNER_ID:
     ADMIN_IDS.add(OWNER_ID)
 
@@ -30,6 +28,8 @@ SETTINGS_FILE = os.path.join(DATA_DIR, 'user_settings.json')
 STATE_FILE = os.path.join(DATA_DIR, 'user_state.json')
 USERS_FILE = os.path.join(DATA_DIR, 'users.json')
 BANNED_FILE = os.path.join(DATA_DIR, 'banned_users.json')
-SESSION_NAME = os.getenv('SESSION_NAME', 'code_devil_v3_structured')
+INDEX_FILE = os.path.join(DATA_DIR, 'index_store.json')
+INDEX_STATE_FILE = os.path.join(DATA_DIR, 'index_state.json')
+SESSION_NAME = os.getenv('SESSION_NAME', 'code_devil_v4_structured')
 
 os.makedirs(DATA_DIR, exist_ok=True)

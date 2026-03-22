@@ -1,16 +1,22 @@
 import json
 import os
 from datetime import datetime
-from config import SETTINGS_FILE, STATE_FILE, USERS_FILE, BANNED_FILE
+from config import SETTINGS_FILE, STATE_FILE, USERS_FILE, BANNED_FILE, INDEX_FILE, INDEX_STATE_FILE
 
 DEFAULT_SETTINGS = {
     'upload_mode': 'Telegram',
-    'thumbnail': False,
-    'caption': False,
+    'thumbnail_enabled': False,
+    'thumbnail_file_id': '',
+    'caption_enabled': False,
+    'caption_text': '',
     'prefix': '',
     'suffix': '',
     'auto_rename': '',
-    'metadata': False,
+    'metadata_enabled': False,
+    'metadata_video_title': '',
+    'metadata_video_author': '',
+    'metadata_audio_title': '',
+    'metadata_subtitle_title': '',
     'upload_destination': '',
     'topic_id': '',
     'replace_words': '',
@@ -23,6 +29,12 @@ WAITING_KEYS = {
     'set_destination': 'upload_destination',
     'set_topic_id': 'topic_id',
     'set_replace_words': 'replace_words',
+    'set_caption_text': 'caption_text',
+    'set_metadata_video_title': 'metadata_video_title',
+    'set_metadata_video_author': 'metadata_video_author',
+    'set_metadata_audio_title': 'metadata_audio_title',
+    'set_metadata_subtitle_title': 'metadata_subtitle_title',
+    'set_thumbnail_photo': 'thumbnail_file_id',
 }
 
 
@@ -52,16 +64,29 @@ def save_all_settings(data):
 def get_user_settings(user_id: int):
     all_settings = get_all_settings()
     uid = str(user_id)
-    if uid not in all_settings:
-        all_settings[uid] = DEFAULT_SETTINGS.copy()
+    current = all_settings.get(uid, {})
+
+    # Backfill newly added keys for old users/settings files.
+    merged = DEFAULT_SETTINGS.copy()
+    if isinstance(current, dict):
+        merged.update(current)
+
+    if uid not in all_settings or merged != current:
+        all_settings[uid] = merged
         save_all_settings(all_settings)
-    return all_settings[uid]
+
+    return merged
 
 
 def update_user_settings(user_id: int, new_data: dict):
     all_settings = get_all_settings()
     uid = str(user_id)
-    current = all_settings.get(uid, DEFAULT_SETTINGS.copy())
+
+    current = DEFAULT_SETTINGS.copy()
+    existing = all_settings.get(uid, {})
+    if isinstance(existing, dict):
+        current.update(existing)
+
     current.update(new_data)
     all_settings[uid] = current
     save_all_settings(all_settings)
@@ -88,8 +113,7 @@ def set_user_state(user_id: int, state: str):
 
 
 def get_user_state(user_id: int):
-    states = get_all_states()
-    return states.get(str(user_id), '')
+    return get_all_states().get(str(user_id), '')
 
 
 def clear_user_state(user_id: int):
@@ -157,3 +181,60 @@ def unban_user(user_id: int):
 
 def banned_count() -> int:
     return len(get_banned_users())
+
+
+def get_all_index_entries():
+    return load_json(INDEX_FILE, [])
+
+
+def save_all_index_entries(data):
+    save_json(INDEX_FILE, data)
+
+
+def add_index_entry(entry: dict):
+    entries = get_all_index_entries()
+    entry = dict(entry)
+    entry['index_no'] = len(entries) + 1
+    entry['indexed_at'] = datetime.utcnow().isoformat()
+    entries.append(entry)
+    save_all_index_entries(entries)
+    return entry['index_no']
+
+
+def index_count() -> int:
+    return len(get_all_index_entries())
+
+
+def get_index_state():
+    return load_json(INDEX_STATE_FILE, {})
+
+
+def save_index_state(data):
+    save_json(INDEX_STATE_FILE, data)
+
+
+def set_index_mode(user_id: int, enabled: bool):
+    state = get_index_state()
+    key = str(user_id)
+    current = state.get(key, {'enabled': False, 'count': 0})
+    current['enabled'] = enabled
+    state[key] = current
+    save_index_state(state)
+
+
+def is_index_mode(user_id: int) -> bool:
+    return bool(get_index_state().get(str(user_id), {}).get('enabled', False))
+
+
+def increase_index_user_count(user_id: int):
+    state = get_index_state()
+    key = str(user_id)
+    current = state.get(key, {'enabled': False, 'count': 0})
+    current['count'] = int(current.get('count', 0)) + 1
+    state[key] = current
+    save_index_state(state)
+    return current['count']
+
+
+def get_index_user_count(user_id: int) -> int:
+    return int(get_index_state().get(str(user_id), {}).get('count', 0))
