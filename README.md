@@ -1,10 +1,32 @@
-# Code Devil Restricted Saver V1.1
+# Code Devil Restricted Saver - Structured V2
 
-Windows local run:
+Ye working single-file V2 ka structured version hai.
 
-1. Copy `.env.example` to `.env`
-2. Fill required values
-3. `python -m venv venv`
-4. `venv\Scripts\Activate.ps1`
-5. `pip install -r requirements.txt`
-6. `python main.py`
+## Files
+- `main.py` → entry point
+- `bot.py` → Pyrogram handlers
+- `config.py` → env config
+- `storage.py` → JSON settings/state storage
+- `keyboards.py` → inline button layouts
+- `texts.py` → bot messages
+
+## Setup
+1. `.env.example` ko copy karke `.env` banao
+2. values bharo
+3. install karo:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. run karo:
+   ```bash
+   python main.py
+   ```
+
+## Commands
+- `/start`
+- `/ping`
+- `/help`
+- `/plan`
+- `/terms`
+- `/settings`
+- `/cancel`

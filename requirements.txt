@@ -1,3 +1,2 @@
 pyrofork
 python-dotenv
-flask
