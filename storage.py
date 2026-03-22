@@ -1,6 +1,7 @@
 import json
 import os
-from config import SETTINGS_FILE, STATE_FILE
+from datetime import datetime
+from config import SETTINGS_FILE, STATE_FILE, USERS_FILE, BANNED_FILE
 
 DEFAULT_SETTINGS = {
     'upload_mode': 'Telegram',
@@ -95,3 +96,64 @@ def clear_user_state(user_id: int):
     states = get_all_states()
     states.pop(str(user_id), None)
     save_all_states(states)
+
+
+def get_all_users():
+    return load_json(USERS_FILE, {})
+
+
+def save_all_users(data):
+    save_json(USERS_FILE, data)
+
+
+def register_user(user):
+    if not user:
+        return
+    users = get_all_users()
+    uid = str(user.id)
+    users[uid] = {
+        'id': user.id,
+        'first_name': getattr(user, 'first_name', '') or '',
+        'username': getattr(user, 'username', '') or '',
+        'last_seen': datetime.utcnow().isoformat(),
+    }
+    save_all_users(users)
+
+
+def user_count() -> int:
+    return len(get_all_users())
+
+
+def get_recent_users(limit: int = 10):
+    users = list(get_all_users().values())
+    users.sort(key=lambda x: x.get('last_seen', ''), reverse=True)
+    return users[:limit]
+
+
+def get_banned_users():
+    data = load_json(BANNED_FILE, [])
+    return set(int(x) for x in data if str(x).isdigit())
+
+
+def save_banned_users(data):
+    save_json(BANNED_FILE, sorted(list(data)))
+
+
+def is_banned(user_id: int) -> bool:
+    return user_id in get_banned_users()
+
+
+def ban_user(user_id: int):
+    banned = get_banned_users()
+    banned.add(int(user_id))
+    save_banned_users(banned)
+
+
+def unban_user(user_id: int):
+    banned = get_banned_users()
+    banned.discard(int(user_id))
+    save_banned_users(banned)
+
+
+def banned_count() -> int:
+    return len(get_banned_users())

@@ -1,32 +1,30 @@
-# Code Devil Restricted Saver - Structured V2
+# Code Devil Restricted Saver Structured V3
 
-Ye working single-file V2 ka structured version hai.
+V3 adds basic admin controls on top of the structured V2 bot.
 
-## Files
-- `main.py` → entry point
-- `bot.py` → Pyrogram handlers
-- `config.py` → env config
-- `storage.py` → JSON settings/state storage
-- `keyboards.py` → inline button layouts
-- `texts.py` → bot messages
+## Features
+- Hinglish UI
+- Force subscribe
+- Settings panel
+- Admin basics:
+  - /stats
+  - /users
+  - /ban user_id
+  - /unban user_id
+  - /broadcast message
 
 ## Setup
-1. `.env.example` ko copy karke `.env` banao
-2. values bharo
-3. install karo:
+1. Create `.env` from `.env.example`
+2. Fill values
+3. Run:
    ```bash
+   python -m venv venv
+   venv\Scripts\Activate.ps1
    pip install -r requirements.txt
-   ```
-4. run karo:
-   ```bash
    python main.py
    ```
 
-## Commands
-- `/start`
-- `/ping`
-- `/help`
-- `/plan`
-- `/terms`
-- `/settings`
-- `/cancel`
+## Notes
+- `OWNER_ID` is required for admin commands.
+- `ADMIN_IDS` can be comma-separated extra admins.
+- Bot should be admin in your force-sub channel.

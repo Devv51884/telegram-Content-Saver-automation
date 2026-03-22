@@ -1,17 +1,24 @@
 from pyrogram import Client, filters
 from pyrogram.errors import UserNotParticipant
 
-from config import API_ID, API_HASH, BOT_TOKEN, SESSION_NAME, FORCE_SUB
+from config import API_ID, API_HASH, BOT_TOKEN, SESSION_NAME, FORCE_SUB, OWNER_ID, ADMIN_IDS
 from keyboards import join_required_buttons, start_buttons, settings_buttons
 from texts import start_text, help_text, plan_text, terms_text, settings_text, unknown_text
 from storage import (
     WAITING_KEYS,
+    ban_user,
+    banned_count,
     clear_user_state,
-    get_user_state,
+    get_recent_users,
     get_user_settings,
+    get_user_state,
+    is_banned,
+    register_user,
     reset_user_settings,
     set_user_state,
+    unban_user,
     update_user_settings,
+    user_count,
 )
 
 app = Client(
@@ -21,6 +28,10 @@ app = Client(
     bot_token=BOT_TOKEN,
     in_memory=True,
 )
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 
 async def check_force_sub(client, message):
@@ -53,6 +64,10 @@ async def check_join_again(client, callback_query):
 async def all_callbacks(client, callback_query):
     user_id = callback_query.from_user.id
     data = callback_query.data
+
+    if is_banned(user_id):
+        await callback_query.answer('🚫 Aap bot use nahi kar sakte.', show_alert=True)
+        return
 
     if data == 'toggle_upload_mode':
         s = get_user_settings(user_id)
@@ -88,11 +103,98 @@ async def all_callbacks(client, callback_query):
     await callback_query.answer('✅ Updated')
 
 
+async def handle_admin_commands(client, message, lowered: str):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        return False
+
+    if lowered.startswith('/stats'):
+        recent = get_recent_users(5)
+        recent_text = '\n'.join(
+            [f"• {u.get('first_name') or 'User'} ({u.get('id')})" for u in recent]
+        ) or 'No recent users'
+        await message.reply_text(
+            '📊 **Bot Stats**\n\n'
+            f'**Total Users:** {user_count()}\n'
+            f'**Banned Users:** {banned_count()}\n'
+            f'**Admins:** {len(ADMIN_IDS)}\n\n'
+            f'**Recent Users:**\n{recent_text}'
+        )
+        return True
+
+    if lowered.startswith('/users'):
+        recent = get_recent_users(15)
+        if not recent:
+            await message.reply_text('Abhi tak koi user data nahi mila.')
+            return True
+        text = '👥 **Recent Users**\n\n' + '\n'.join(
+            [f"• {u.get('first_name') or 'User'} | `{u.get('id')}` | @{u.get('username') or 'no_username'}" for u in recent]
+        )
+        await message.reply_text(text)
+        return True
+
+    if lowered.startswith('/ban'):
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            await message.reply_text('Use: /ban user_id')
+            return True
+        target = int(parts[1].strip())
+        if target == OWNER_ID:
+            await message.reply_text('Owner ko ban nahi kar sakte.')
+            return True
+        ban_user(target)
+        await message.reply_text(f'🚫 User `{target}` ko ban kar diya gaya.')
+        return True
+
+    if lowered.startswith('/unban'):
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            await message.reply_text('Use: /unban user_id')
+            return True
+        target = int(parts[1].strip())
+        unban_user(target)
+        await message.reply_text(f'✅ User `{target}` ko unban kar diya gaya.')
+        return True
+
+    if lowered.startswith('/broadcast'):
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await message.reply_text('Use: /broadcast your message')
+            return True
+        msg = parts[1].strip()
+        users = get_recent_users(100000)
+        sent = 0
+        failed = 0
+        status = await message.reply_text('📢 Broadcast start ho raha hai...')
+        for u in users:
+            uid = u.get('id')
+            if not uid or is_banned(uid):
+                continue
+            try:
+                await client.send_message(uid, f'📢 **Code Devil Broadcast**\n\n{msg}')
+                sent += 1
+            except Exception:
+                failed += 1
+        await status.edit_text(
+            '📢 **Broadcast Complete**\n\n'
+            f'✅ Sent: {sent}\n'
+            f'❌ Failed: {failed}'
+        )
+        return True
+
+    return False
+
+
 @app.on_message(filters.private)
 async def catch_all(client, message):
     print('MESSAGE RECEIVED =>', repr(message.text))
+    register_user(message.from_user)
 
     user_id = message.from_user.id
+    if is_banned(user_id):
+        await message.reply_text('🚫 Aapko is bot se ban kiya gaya hai.')
+        return
+
     text_raw = message.text or ''
     text = text_raw.strip()
     lowered = text.lower()
@@ -105,6 +207,9 @@ async def catch_all(client, message):
             clear_user_state(user_id)
             await message.reply_text(f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye.")
             return
+
+    if await handle_admin_commands(client, message, lowered):
+        return
 
     if lowered.startswith('/cancel'):
         clear_user_state(user_id)

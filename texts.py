@@ -4,7 +4,7 @@ from storage import get_user_settings
 
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V2 Structured**\n\n"
+        f"👋 Welcome to **{APP_NAME} V3**\n\n"
         "Ye Code Devil ka working structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
@@ -13,7 +13,9 @@ def start_text():
         "/plan - Roadmap dekho\n"
         "/terms - Rules dekho\n"
         "/settings - Personal settings kholo\n"
-        "/cancel - Current input cancel karo"
+        "/cancel - Current input cancel karo\n\n"
+        "**New in V3:**\n"
+        "Admin basics add ho gaye hain: /stats, /users, /ban, /unban, /broadcast"
     )
 
 
@@ -26,7 +28,9 @@ def help_text():
         "/plan - Aage ke versions me kya aayega dekhne ke liye\n"
         "/terms - Bot ke rules dekhne ke liye\n"
         "/settings - Personal settings panel kholne ke liye\n"
-        "/cancel - Current text input mode cancel karne ke liye"
+        "/cancel - Current text input mode cancel karne ke liye\n\n"
+        "**Admin Commands**\n"
+        "/stats\n/users\n/ban user_id\n/unban user_id\n/broadcast your message"
     )
 
 
@@ -35,7 +39,7 @@ def plan_text():
         "🛣️ **Code Devil Bot Roadmap**\n\n"
         "✅ V1 - Working base bot\n"
         "✅ V2 - Settings panel basic version\n"
-        "🔜 V3 - Admin controls\n"
+        "✅ V3 - Admin controls basic version\n"
         "🔜 V4 - Login/session system\n"
         "🔜 V5 - Batch processing\n"
         "🔜 V6 - Premium + advanced tools"
