@@ -1,17 +1,86 @@
-from pyrogram import Client, filters
-from pyrogram.errors import UserNotParticipant
+import os
+import re
+import uuid
+import time
+import asyncio
 
-from config import API_ID, API_HASH, BOT_TOKEN, SESSION_NAME, FORCE_SUB, OWNER_ID, ADMIN_IDS
+from pyrogram import Client, filters
+from pyrogram.errors import (
+    UserNotParticipant,
+    RPCError,
+    SessionPasswordNeeded,
+    PhoneCodeInvalid,
+    PasswordHashInvalid,
+    PhoneNumberInvalid,
+    FloodWait,
+)
+
+from config import (
+    API_ID,
+    API_HASH,
+    BOT_TOKEN,
+    SESSION_NAME,
+    FORCE_SUB,
+    OWNER_ID,
+    ADMIN_IDS,
+    LOG_CHANNEL,
+    TEMP_DIR,
+    MAX_TASKS_PER_USER,
+)
+
 from keyboards import (
-    join_required_buttons, start_buttons, settings_home_buttons, submenu_nav,
-    thumbnail_buttons, caption_buttons, simple_set_buttons, metadata_buttons, metadata_field_buttons
+    join_required_buttons,
+    start_buttons,
+    settings_home_buttons,
+    submenu_nav,
+    thumbnail_buttons,
+    caption_buttons,
+    simple_set_buttons,
+    metadata_buttons,
+    metadata_field_buttons,
+    index_buttons,
+    login_buttons,
+    task_buttons,
+    my_tasks_buttons,
 )
+
 from texts import (
-    start_text, help_text, plan_text, terms_text, settings_home_text, upload_mode_text,
-    thumbnail_text, caption_text, prefix_text, suffix_text, auto_rename_text, destination_text,
-    topic_id_text, replace_words_text, metadata_home_text, metadata_field_text,
-    unknown_text, index_started_text, index_stopped_text, index_stats_text
+    start_text,
+    help_text,
+    plan_text,
+    terms_text,
+    settings_home_text,
+    upload_mode_text,
+    thumbnail_text,
+    caption_text,
+    prefix_text,
+    suffix_text,
+    auto_rename_text,
+    destination_text,
+    topic_id_text,
+    replace_words_text,
+    metadata_home_text,
+    metadata_field_text,
+    unknown_text,
+    index_started_text,
+    index_stopped_text,
+    index_stats_text,
+    index_info_text,
+    login_intro_text,
+    ask_phone_text,
+    ask_code_text,
+    ask_password_text,
+    login_success_text,
+    login_failed_text,
+    login_status_text,
+    logout_success_text,
+    logout_missing_text,
+    task_running_text,
+    task_completed_text,
+    task_failed_text,
+    my_tasks_text,
 )
+
 from storage import (
     WAITING_KEYS,
     add_index_entry,
@@ -31,6 +100,21 @@ from storage import (
     unban_user,
     update_user_settings,
     user_count,
+
+    # V6 session helpers
+    save_user_session,
+    get_user_session_string,
+    has_user_session,
+    delete_user_session,
+    set_login_temp,
+    get_login_temp,
+
+    # V6 task helpers
+    set_task,
+    get_task,
+    delete_task,
+    get_user_tasks,
+    count_running_tasks,
 )
 
 app = Client(
@@ -41,9 +125,140 @@ app = Client(
     in_memory=True,
 )
 
+TEMP_LOGIN_CLIENTS = {}
+
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def normalize_target(target: str):
+    target = (target or "").strip()
+    if not target:
+        return None
+
+    if target.lstrip("-").isdigit():
+        return int(target)
+
+    if target.startswith("@"):
+        return target
+
+    return target
+
+
+def safe_topic_id(value: str):
+    value = (value or "").strip()
+    if value.isdigit():
+        return int(value)
+    return None
+
+
+def make_task_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def build_final_caption(message, settings: dict):
+    original_caption = message.caption or ""
+    caption = original_caption
+
+    if settings.get("caption_enabled") and settings.get("caption_text"):
+        caption = settings.get("caption_text", "")
+
+    prefix = settings.get("prefix", "").strip()
+    suffix = settings.get("suffix", "").strip()
+
+    if caption:
+        if prefix:
+            caption = f"{prefix} {caption}".strip()
+        if suffix:
+            caption = f"{caption} {suffix}".strip()
+
+    return caption
+
+
+def build_final_text(text: str, settings: dict):
+    value = text or ""
+
+    if settings.get("caption_enabled") and settings.get("caption_text"):
+        value = settings.get("caption_text", value)
+
+    prefix = settings.get("prefix", "").strip()
+    suffix = settings.get("suffix", "").strip()
+
+    if prefix:
+        value = f"{prefix} {value}".strip()
+    if suffix:
+        value = f"{value} {suffix}".strip()
+
+    return value
+
+
+async def update_task_status_message(client, task_id: str, done: bool = False):
+    task = get_task(task_id)
+    if not task:
+        return
+
+    chat_id = task.get("status_chat_id")
+    message_id = task.get("status_message_id")
+    if not chat_id or not message_id:
+        return
+
+    try:
+        text = task_completed_text(task) if done and task.get("status") == "completed" else (
+            task_failed_text(task) if done and task.get("status") == "failed" else task_running_text(task)
+        )
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=task_buttons(task_id, done=done),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
+
+
+async def create_task_status_message(message, task_id: str):
+    task = get_task(task_id)
+    if not task:
+        return
+
+    sent = await message.reply_text(
+        task_running_text(task),
+        reply_markup=task_buttons(task_id, done=False),
+        disable_web_page_preview=True,
+    )
+
+    set_task(task_id, {
+        "status_chat_id": sent.chat.id,
+        "status_message_id": sent.id,
+    })
+
+
+async def throttled_progress_update(client, task_id: str):
+    task = get_task(task_id)
+    if not task:
+        return
+
+    now = time.time()
+    last = float(task.get("last_ui_update", 0) or 0)
+    if now - last < 2:
+        return
+
+    set_task(task_id, {"last_ui_update": now})
+    await update_task_status_message(client, task_id, done=False)
+
+
+async def progress_callback(current, total, client, task_id: str, stage: str):
+    percent = 0
+    if total:
+        percent = round((current / total) * 100, 2)
+
+    set_task(task_id, {
+        "status": stage,
+        "progress_text": f"{percent:.2f}% ({current}/{total})",
+    })
+    await throttled_progress_update(client, task_id)
 
 
 async def check_force_sub(client, message):
@@ -78,6 +293,7 @@ def parse_index_entry(message):
     file_size = 0
     caption = message.caption or ''
     text = message.text or ''
+
     if message.photo:
         content_type = 'photo'
         file_id = message.photo.file_id
@@ -104,9 +320,10 @@ def parse_index_entry(message):
     elif message.sticker:
         content_type = 'sticker'
         file_id = message.sticker.file_id
+
     return {
-        'user_id': message.from_user.id,
-        'chat_id': message.chat.id,
+        'user_id': message.from_user.id if message.from_user else 0,
+        'chat_id': message.chat.id if message.chat else 0,
         'message_id': message.id,
         'content_type': content_type,
         'text': text,
@@ -115,6 +332,419 @@ def parse_index_entry(message):
         'file_name': file_name,
         'file_size': file_size,
     }
+
+
+def extract_telegram_link_info(text: str):
+    """
+    Supports:
+    https://t.me/channelusername/123
+    https://t.me/c/123456789/456
+    """
+    if not text:
+        return None
+
+    text = text.strip()
+
+    public_match = re.search(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)", text)
+    private_match = re.search(r"https?://t\.me/c/(\d+)/(\d+)", text)
+
+    if private_match:
+        raw_chat_id = private_match.group(1)
+        msg_id = int(private_match.group(2))
+        chat_id = int(f"-100{raw_chat_id}")
+        return {"chat_id": chat_id, "message_id": msg_id, "link_type": "private"}
+
+    if public_match:
+        username = public_match.group(1)
+        msg_id = int(public_match.group(2))
+        if username.lower() != "c":
+            return {"chat_id": username, "message_id": msg_id, "link_type": "public"}
+
+    return None
+
+
+def get_temp_download_path(source_msg):
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    base_name = f"cd_{int(time.time())}_{source_msg.id}"
+
+    if source_msg.document and getattr(source_msg.document, "file_name", None):
+        return os.path.join(TEMP_DIR, source_msg.document.file_name)
+
+    if source_msg.video and getattr(source_msg.video, "file_name", None):
+        return os.path.join(TEMP_DIR, source_msg.video.file_name)
+
+    if source_msg.audio and getattr(source_msg.audio, "file_name", None):
+        return os.path.join(TEMP_DIR, source_msg.audio.file_name)
+
+    if source_msg.photo:
+        return os.path.join(TEMP_DIR, f"{base_name}.jpg")
+
+    if source_msg.voice:
+        return os.path.join(TEMP_DIR, f"{base_name}.ogg")
+
+    if source_msg.animation:
+        return os.path.join(TEMP_DIR, f"{base_name}.mp4")
+
+    return os.path.join(TEMP_DIR, f"{base_name}.bin")
+
+
+async def get_authorized_client_for_user(user_id: int):
+    session_string = get_user_session_string(user_id)
+    if not session_string:
+        return None
+
+    client = Client(
+        name=f"user_session_{user_id}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=session_string,
+        in_memory=True,
+    )
+    await client.connect()
+    return client
+
+
+async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str):
+    info = extract_telegram_link_info(link_text)
+    if not info:
+        return None, None, None
+
+    # First try via bot client
+    try:
+        msg = await bot_client.get_messages(info["chat_id"], info["message_id"])
+        if msg:
+            return msg, info, None
+    except Exception:
+        pass
+
+    # Then try via authorized user session
+    if has_user_session(user_id):
+        user_client = await get_authorized_client_for_user(user_id)
+        try:
+            msg = await user_client.get_messages(info["chat_id"], info["message_id"])
+            if msg:
+                return msg, info, user_client
+        except Exception:
+            await user_client.disconnect()
+            raise
+
+    return None, info, None
+
+
+async def upload_file_to_target(client, task_id: str, target, file_path: str, source_msg, settings: dict):
+    caption = build_final_caption(source_msg, settings)
+    topic_id = safe_topic_id(settings.get("topic_id", ""))
+
+    if source_msg.photo:
+        return await client.send_photo(
+            chat_id=target,
+            photo=file_path,
+            caption=caption if caption else None,
+            message_thread_id=topic_id if topic_id else None,
+            progress=progress_callback,
+            progress_args=(client, task_id, "uploading"),
+        )
+
+    if source_msg.video or source_msg.animation:
+        return await client.send_video(
+            chat_id=target,
+            video=file_path,
+            caption=caption if caption else None,
+            message_thread_id=topic_id if topic_id else None,
+            progress=progress_callback,
+            progress_args=(client, task_id, "uploading"),
+        )
+
+    if source_msg.audio:
+        return await client.send_audio(
+            chat_id=target,
+            audio=file_path,
+            caption=caption if caption else None,
+            message_thread_id=topic_id if topic_id else None,
+            progress=progress_callback,
+            progress_args=(client, task_id, "uploading"),
+        )
+
+    if source_msg.voice:
+        return await client.send_voice(
+            chat_id=target,
+            voice=file_path,
+            caption=caption if caption else None,
+            message_thread_id=topic_id if topic_id else None,
+            progress=progress_callback,
+            progress_args=(client, task_id, "uploading"),
+        )
+
+    return await client.send_document(
+        chat_id=target,
+        document=file_path,
+        caption=caption if caption else None,
+        message_thread_id=topic_id if topic_id else None,
+        progress=progress_callback,
+        progress_args=(client, task_id, "uploading"),
+    )
+
+
+async def send_text_to_target(client, target, source_msg, settings: dict):
+    topic_id = safe_topic_id(settings.get("topic_id", ""))
+    final_text = build_final_text(source_msg.text or source_msg.caption or "", settings)
+
+    return await client.send_message(
+        chat_id=target,
+        text=final_text or " ",
+        message_thread_id=topic_id if topic_id else None,
+        disable_web_page_preview=True,
+    )
+
+
+async def process_link_task(client, user_id: int, message, link_text: str):
+    if count_running_tasks(user_id) >= MAX_TASKS_PER_USER:
+        await message.reply_text(
+            f'⚠️ Ek time par max {MAX_TASKS_PER_USER} running tasks allowed hain.'
+        )
+        return
+
+    task_id = make_task_id()
+    settings = get_user_settings(user_id)
+    destination = normalize_target(settings.get("upload_destination", ""))
+
+    set_task(task_id, {
+        "task_id": task_id,
+        "user_id": user_id,
+        "source": link_text.strip(),
+        "destination": str(destination or "Not Set"),
+        "status": "queued",
+        "progress_text": "",
+        "error": "",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+
+    await create_task_status_message(message, task_id)
+
+    user_client = None
+    download_path = None
+
+    try:
+        set_task(task_id, {"status": "fetching", "progress_text": "Finding source message..."})
+        await update_task_status_message(client, task_id)
+
+        source_msg, info, user_client = await fetch_message_via_best_client(client, user_id, link_text)
+
+        if not source_msg:
+            set_task(task_id, {
+                "status": "failed",
+                "error": "Source message fetch nahi ho paya. Public access ya authorized login required."
+            })
+            await update_task_status_message(client, task_id, done=True)
+            return
+
+        entry = {
+            'user_id': user_id,
+            'chat_id': getattr(source_msg.chat, 'id', 0) if getattr(source_msg, 'chat', None) else 0,
+            'message_id': source_msg.id,
+            'content_type': (
+                'photo' if source_msg.photo else
+                'video' if source_msg.video else
+                'document' if source_msg.document else
+                'audio' if source_msg.audio else
+                'voice' if source_msg.voice else
+                'sticker' if source_msg.sticker else
+                'text'
+            ),
+            'text': source_msg.text or '',
+            'caption': source_msg.caption or '',
+            'file_id': (
+                source_msg.photo.file_id if source_msg.photo else
+                source_msg.video.file_id if source_msg.video else
+                source_msg.document.file_id if source_msg.document else
+                source_msg.audio.file_id if source_msg.audio else
+                source_msg.voice.file_id if source_msg.voice else
+                source_msg.sticker.file_id if source_msg.sticker else
+                ''
+            ),
+            'file_name': (
+                getattr(source_msg.video, 'file_name', '') if source_msg.video else
+                getattr(source_msg.document, 'file_name', '') if source_msg.document else
+                getattr(source_msg.audio, 'file_name', '') if source_msg.audio else
+                ''
+            ),
+            'file_size': (
+                getattr(source_msg.photo, 'file_size', 0) if source_msg.photo else
+                getattr(source_msg.video, 'file_size', 0) if source_msg.video else
+                getattr(source_msg.document, 'file_size', 0) if source_msg.document else
+                getattr(source_msg.audio, 'file_size', 0) if source_msg.audio else
+                getattr(source_msg.voice, 'file_size', 0) if source_msg.voice else
+                0
+            ),
+            'source_link': link_text.strip(),
+            'link_type': info.get('link_type') if info else '',
+        }
+
+        idx_no = add_index_entry(entry)
+        user_count_now = increase_index_user_count(user_id)
+
+        # Text only
+        if not (source_msg.photo or source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.animation):
+            set_task(task_id, {"status": "uploading", "progress_text": "Sending text/message..."})
+            await update_task_status_message(client, task_id)
+
+            if destination:
+                await send_text_to_target(client, destination, source_msg, settings)
+
+            if LOG_CHANNEL:
+                await send_text_to_target(client, LOG_CHANNEL, source_msg, settings)
+
+            set_task(task_id, {
+                "status": "completed",
+                "progress_text": f"Index {idx_no} | Count {user_count_now}"
+            })
+            await update_task_status_message(client, task_id, done=True)
+
+            await message.reply_text(
+                f'⚡ **Auto Link Process Done (V6)**\n\n'
+                f'📚 Index No: **{idx_no}**\n'
+                f'📦 Type: **{entry["content_type"]}**\n'
+                f'📊 Your Total Indexed: **{user_count_now}**\n'
+                f'📍 Destination: **{destination or "Not Set"}**\n'
+                f'🔗 Link Type: **{entry["link_type"] or "unknown"}**'
+            )
+            return
+
+        # Download media
+        set_task(task_id, {"status": "downloading", "progress_text": "Starting download..."})
+        await update_task_status_message(client, task_id)
+
+        download_path = get_temp_download_path(source_msg)
+        source_client = user_client if user_client else client
+
+        await source_client.download_media(
+            source_msg,
+            file_name=download_path,
+            progress=progress_callback,
+            progress_args=(client, task_id, "downloading"),
+        )
+
+        # Upload media
+        set_task(task_id, {"status": "uploading", "progress_text": "Preparing upload..."})
+        await update_task_status_message(client, task_id)
+
+        if destination:
+            await upload_file_to_target(client, task_id, destination, download_path, source_msg, settings)
+
+        if LOG_CHANNEL:
+            await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, settings)
+
+        set_task(task_id, {
+            "status": "completed",
+            "progress_text": f"Index {idx_no} | Count {user_count_now}"
+        })
+        await update_task_status_message(client, task_id, done=True)
+
+        await message.reply_text(
+            f'⚡ **Auto Link Process Done (V6)**\n\n'
+            f'📚 Index No: **{idx_no}**\n'
+            f'📦 Type: **{entry["content_type"]}**\n'
+            f'📊 Your Total Indexed: **{user_count_now}**\n'
+            f'📍 Destination: **{destination or "Not Set"}**\n'
+            f'🔗 Link Type: **{entry["link_type"] or "unknown"}**'
+        )
+
+    except FloodWait as e:
+        set_task(task_id, {"status": "failed", "error": f"FloodWait: wait {e.value}s"})
+        await update_task_status_message(client, task_id, done=True)
+        await message.reply_text(f'❌ FloodWait: {e.value}s wait karo.')
+    except Exception as e:
+        set_task(task_id, {"status": "failed", "error": str(e)})
+        await update_task_status_message(client, task_id, done=True)
+        await message.reply_text(f'❌ Task failed:\n{e}')
+    finally:
+        if user_client:
+            try:
+                await user_client.disconnect()
+            except Exception:
+                pass
+        if download_path and os.path.exists(download_path):
+            try:
+                os.remove(download_path)
+            except Exception:
+                pass
+
+
+async def start_login_client(user_id: int):
+    login_client = Client(
+        name=f"login_{user_id}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        in_memory=True,
+    )
+    await login_client.connect()
+    TEMP_LOGIN_CLIENTS[user_id] = login_client
+    return login_client
+
+
+async def get_or_create_login_client(user_id: int):
+    existing = TEMP_LOGIN_CLIENTS.get(user_id)
+    if existing:
+        return existing
+    return await start_login_client(user_id)
+
+
+async def cleanup_login_client(user_id: int):
+    client = TEMP_LOGIN_CLIENTS.pop(user_id, None)
+    if client:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+
+async def begin_login_flow(user_id: int, phone: str):
+    login_client = await get_or_create_login_client(user_id)
+    sent = await login_client.send_code(phone)
+    set_login_temp(user_id, "phone", phone)
+    set_login_temp(user_id, "phone_code_hash", sent.phone_code_hash)
+    set_user_state(user_id, "login_code")
+
+
+async def finish_login_with_code(user_id: int, code: str):
+    phone = get_login_temp(user_id, "phone", "")
+    phone_code_hash = get_login_temp(user_id, "phone_code_hash", "")
+
+    if not phone or not phone_code_hash:
+        raise RuntimeError("Login session data missing. Dobara /login try karo.")
+
+    login_client = await get_or_create_login_client(user_id)
+
+    try:
+        await login_client.sign_in(
+            phone_number=phone,
+            phone_code_hash=phone_code_hash,
+            phone_code=code,
+        )
+    except SessionPasswordNeeded:
+        set_user_state(user_id, "login_password")
+        raise
+
+    me = await login_client.get_me()
+    session_string = await login_client.export_session_string()
+    save_user_session(user_id, session_string, tg_user_id=me.id, phone=phone)
+    clear_user_state(user_id)
+    await cleanup_login_client(user_id)
+    return me, phone
+
+
+async def finish_login_with_password(user_id: int, password: str):
+    phone = get_login_temp(user_id, "phone", "")
+    login_client = await get_or_create_login_client(user_id)
+    await login_client.check_password(password=password)
+
+    me = await login_client.get_me()
+    session_string = await login_client.export_session_string()
+    save_user_session(user_id, session_string, tg_user_id=me.id, phone=phone)
+    clear_user_state(user_id)
+    await cleanup_login_client(user_id)
+    return me, phone
 
 
 async def handle_admin_commands(client, message, lowered: str):
@@ -173,11 +803,13 @@ async def handle_admin_commands(client, message, lowered: str):
         if len(parts) < 2 or not parts[1].strip():
             await message.reply_text('Use: /broadcast your message')
             return True
+
         msg = parts[1].strip()
         users = get_recent_users(100000)
         sent = 0
         failed = 0
         status = await message.reply_text('📢 Broadcast start ho raha hai...')
+
         for u in users:
             uid = u.get('id')
             if not uid or is_banned(uid):
@@ -187,7 +819,12 @@ async def handle_admin_commands(client, message, lowered: str):
                 sent += 1
             except Exception:
                 failed += 1
-        await status.edit_text('📢 **Broadcast Complete**\n\n' f'✅ Sent: {sent}\n' f'❌ Failed: {failed}')
+
+        await status.edit_text(
+            '📢 **Broadcast Complete**\n\n'
+            f'✅ Sent: {sent}\n'
+            f'❌ Failed: {failed}'
+        )
         return True
 
     if lowered.startswith('/index_id'):
@@ -218,179 +855,332 @@ async def all_callbacks(client, callback_query):
 
     s = get_user_settings(user_id)
 
+    # =============== V6 TASK BUTTONS ===============
+    if data.startswith('task_refresh:'):
+        task_id = data.split(':', 1)[1]
+        await update_task_status_message(client, task_id, done=get_task(task_id).get("status") in {"completed", "failed", "cancelled"})
+        await callback_query.answer('♻️ Refreshed')
+        return
+
+    elif data.startswith('task_cancel:'):
+        task_id = data.split(':', 1)[1]
+        task = get_task(task_id)
+        if task:
+            set_task(task_id, {"status": "cancelled", "error": "Cancelled by user"})
+            await update_task_status_message(client, task_id, done=True)
+        await callback_query.answer('🛑 Cancelled')
+        return
+
+    elif data == 'show_my_tasks':
+        tasks = get_user_tasks(user_id, limit=10)
+        try:
+            await callback_query.message.edit_text(
+                my_tasks_text(tasks),
+                reply_markup=my_tasks_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    # =============== V6 LOGIN BUTTONS ===============
+    elif data == 'show_login_info':
+        try:
+            await callback_query.message.edit_text(
+                login_intro_text(),
+                reply_markup=login_buttons(has_user_session(user_id)),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == 'show_login_status':
+        try:
+            await callback_query.message.edit_text(
+                login_status_text(user_id),
+                reply_markup=login_buttons(has_user_session(user_id)),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == 'start_login_flow':
+        set_user_state(user_id, 'login_phone')
+        try:
+            await callback_query.message.edit_text(
+                ask_phone_text(),
+                reply_markup=login_buttons(has_user_session(user_id)),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == 'do_logout':
+        if has_user_session(user_id):
+            delete_user_session(user_id)
+            await cleanup_login_client(user_id)
+            try:
+                await callback_query.message.edit_text(
+                    logout_success_text(),
+                    reply_markup=login_buttons(False),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                await callback_query.message.edit_text(
+                    logout_missing_text(),
+                    reply_markup=login_buttons(False),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        await callback_query.answer()
+        return
+
+    # =============== EXISTING SETTINGS ===============
     if data == 'show_settings_home':
         text = settings_home_text(user_id)
         kb = settings_home_buttons()
+
     elif data == 'show_upload_mode':
         text = upload_mode_text()
         kb = submenu_nav()
+
     elif data == 'show_thumbnail':
         text = thumbnail_text(user_id)
         kb = thumbnail_buttons(s['thumbnail_enabled'])
+
     elif data == 'toggle_thumbnail_enabled':
         s['thumbnail_enabled'] = not s['thumbnail_enabled']
         update_user_settings(user_id, s)
         text = thumbnail_text(user_id)
         kb = thumbnail_buttons(s['thumbnail_enabled'])
+
     elif data == 'set_thumbnail_photo':
         set_user_state(user_id, 'set_thumbnail_photo')
         await callback_query.message.reply_text('🖼 Ab ek photo bhejo jise custom thumbnail save karna hai.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_thumbnail':
         update_user_settings(user_id, {'thumbnail_file_id': '', 'thumbnail_enabled': False})
         text = thumbnail_text(user_id)
         kb = thumbnail_buttons(False)
+
     elif data == 'show_caption':
         text = caption_text(user_id)
         kb = caption_buttons(s['caption_enabled'])
+
     elif data == 'toggle_caption_enabled':
         s['caption_enabled'] = not s['caption_enabled']
         update_user_settings(user_id, s)
         text = caption_text(user_id)
         kb = caption_buttons(s['caption_enabled'])
+
     elif data == 'set_caption_text':
         set_user_state(user_id, 'set_caption_text')
         await callback_query.message.reply_text('📝 Ab custom caption bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_caption':
         update_user_settings(user_id, {'caption_text': '', 'caption_enabled': False})
         text = caption_text(user_id)
         kb = caption_buttons(False)
+
     elif data == 'show_prefix':
         text = prefix_text(user_id)
         kb = simple_set_buttons('set_prefix', 'remove_prefix')
+
     elif data == 'set_prefix':
         set_user_state(user_id, 'set_prefix')
         await callback_query.message.reply_text('🏷 Ab prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_prefix':
         update_user_settings(user_id, {'prefix': ''})
         text = prefix_text(user_id)
         kb = simple_set_buttons('set_prefix', 'remove_prefix')
+
     elif data == 'show_suffix':
         text = suffix_text(user_id)
         kb = simple_set_buttons('set_suffix', 'remove_suffix')
+
     elif data == 'set_suffix':
         set_user_state(user_id, 'set_suffix')
         await callback_query.message.reply_text('🔖 Ab suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_suffix':
         update_user_settings(user_id, {'suffix': ''})
         text = suffix_text(user_id)
         kb = simple_set_buttons('set_suffix', 'remove_suffix')
+
     elif data == 'show_auto_rename':
         text = auto_rename_text(user_id)
         kb = simple_set_buttons('set_auto_rename', 'remove_auto_rename')
+
     elif data == 'set_auto_rename':
         set_user_state(user_id, 'set_auto_rename')
         await callback_query.message.reply_text('✍️ Ab auto rename value bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_auto_rename':
         update_user_settings(user_id, {'auto_rename': ''})
         text = auto_rename_text(user_id)
         kb = simple_set_buttons('set_auto_rename', 'remove_auto_rename')
+
     elif data == 'show_destination':
         text = destination_text(user_id)
         kb = simple_set_buttons('set_destination', 'remove_destination')
+
     elif data == 'set_destination':
         set_user_state(user_id, 'set_destination')
         await callback_query.message.reply_text('📍 Ab upload destination bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_destination':
         update_user_settings(user_id, {'upload_destination': ''})
         text = destination_text(user_id)
         kb = simple_set_buttons('set_destination', 'remove_destination')
+
     elif data == 'show_topic_id':
         text = topic_id_text(user_id)
         kb = simple_set_buttons('set_topic_id', 'remove_topic_id')
+
     elif data == 'set_topic_id':
         set_user_state(user_id, 'set_topic_id')
         await callback_query.message.reply_text('🧵 Ab topic id bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_topic_id':
         update_user_settings(user_id, {'topic_id': ''})
         text = topic_id_text(user_id)
         kb = simple_set_buttons('set_topic_id', 'remove_topic_id')
+
     elif data == 'show_replace_words':
         text = replace_words_text(user_id)
         kb = simple_set_buttons('set_replace_words', 'remove_replace_words')
+
     elif data == 'set_replace_words':
         set_user_state(user_id, 'set_replace_words')
         await callback_query.message.reply_text('🔁 Ab remove/replace rules bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_replace_words':
         update_user_settings(user_id, {'replace_words': ''})
         text = replace_words_text(user_id)
         kb = simple_set_buttons('set_replace_words', 'remove_replace_words')
+
     elif data == 'show_metadata':
         text = metadata_home_text(user_id)
         kb = metadata_buttons(s['metadata_enabled'])
+
     elif data == 'toggle_metadata_enabled':
         s['metadata_enabled'] = not s['metadata_enabled']
         update_user_settings(user_id, s)
         text = metadata_home_text(user_id)
         kb = metadata_buttons(s['metadata_enabled'])
+
     elif data == 'show_metadata_video_title':
         text = metadata_field_text(user_id, 'Video Title', 'metadata_video_title')
         kb = metadata_field_buttons('set_metadata_video_title', 'remove_metadata_video_title')
+
     elif data == 'set_metadata_video_title':
         set_user_state(user_id, 'set_metadata_video_title')
         await callback_query.message.reply_text('🎬 Ab Video Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_metadata_video_title':
         update_user_settings(user_id, {'metadata_video_title': ''})
         text = metadata_field_text(user_id, 'Video Title', 'metadata_video_title')
         kb = metadata_field_buttons('set_metadata_video_title', 'remove_metadata_video_title')
+
     elif data == 'show_metadata_video_author':
         text = metadata_field_text(user_id, 'Video Author', 'metadata_video_author')
         kb = metadata_field_buttons('set_metadata_video_author', 'remove_metadata_video_author')
+
     elif data == 'set_metadata_video_author':
         set_user_state(user_id, 'set_metadata_video_author')
         await callback_query.message.reply_text('👤 Ab Video Author bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_metadata_video_author':
         update_user_settings(user_id, {'metadata_video_author': ''})
         text = metadata_field_text(user_id, 'Video Author', 'metadata_video_author')
         kb = metadata_field_buttons('set_metadata_video_author', 'remove_metadata_video_author')
+
     elif data == 'show_metadata_audio_title':
         text = metadata_field_text(user_id, 'Audio Title', 'metadata_audio_title')
         kb = metadata_field_buttons('set_metadata_audio_title', 'remove_metadata_audio_title')
+
     elif data == 'set_metadata_audio_title':
         set_user_state(user_id, 'set_metadata_audio_title')
         await callback_query.message.reply_text('🎵 Ab Audio Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_metadata_audio_title':
         update_user_settings(user_id, {'metadata_audio_title': ''})
         text = metadata_field_text(user_id, 'Audio Title', 'metadata_audio_title')
         kb = metadata_field_buttons('set_metadata_audio_title', 'remove_metadata_audio_title')
+
     elif data == 'show_metadata_subtitle_title':
         text = metadata_field_text(user_id, 'Subtitle Title', 'metadata_subtitle_title')
         kb = metadata_field_buttons('set_metadata_subtitle_title', 'remove_metadata_subtitle_title')
+
     elif data == 'set_metadata_subtitle_title':
         set_user_state(user_id, 'set_metadata_subtitle_title')
         await callback_query.message.reply_text('💬 Ab Subtitle Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
+
     elif data == 'remove_metadata_subtitle_title':
         update_user_settings(user_id, {'metadata_subtitle_title': ''})
         text = metadata_field_text(user_id, 'Subtitle Title', 'metadata_subtitle_title')
         kb = metadata_field_buttons('set_metadata_subtitle_title', 'remove_metadata_subtitle_title')
+
+    elif data == 'show_index_settings':
+        text = index_info_text(user_id)
+        kb = index_buttons(is_index_mode(user_id))
+
+    elif data == 'toggle_index_mode':
+        current = is_index_mode(user_id)
+        set_index_mode(user_id, not current)
+        text = settings_home_text(user_id)
+        kb = settings_home_buttons()
+
+    elif data == 'show_index_stats':
+        text = index_stats_text(user_id)
+        kb = index_buttons(is_index_mode(user_id))
+
+    elif data == 'show_index_info':
+        text = index_info_text(user_id)
+        kb = index_buttons(is_index_mode(user_id))
+
     elif data == 'reset_all_settings':
         reset_user_settings(user_id)
         clear_user_state(user_id)
         text = settings_home_text(user_id)
         kb = settings_home_buttons()
+
     elif data == 'close_settings':
         try:
             await callback_query.message.delete()
@@ -398,6 +1188,7 @@ async def all_callbacks(client, callback_query):
             pass
         await callback_query.answer('Closed')
         return
+
     else:
         await callback_query.answer('Unknown action')
         return
@@ -422,47 +1213,131 @@ async def catch_all(client, message):
     text = text_raw.strip()
     lowered = text.lower()
 
-    # real-time indexing for admins in index mode
-    if is_admin(user_id) and is_index_mode(user_id):
-        if not lowered.startswith('/stop_index') and not lowered.startswith('/index_stats') and not lowered.startswith('/index_id'):
-            entry = parse_index_entry(message)
-            idx_no = add_index_entry(entry)
-            user_count_now = increase_index_user_count(user_id)
-            await message.reply_text(
-                f'📚 Indexed successfully\n\n'
-                f'Index No: **{idx_no}**\n'
-                f'Type: **{entry["content_type"]}**\n'
-                f'Your Total Indexed: **{user_count_now}**'
-            )
+    state = get_user_state(user_id)
+
+    # =========================
+    # V6 LOGIN FLOW
+    # =========================
+    if state == 'login_phone' and not lowered.startswith('/cancel'):
+        phone = text.replace(" ", "")
+        try:
+            await begin_login_flow(user_id, phone)
+            await message.reply_text(ask_code_text())
+            return
+        except PhoneNumberInvalid:
+            await message.reply_text(login_failed_text("Invalid phone number."))
+            return
+        except FloodWait as e:
+            await message.reply_text(login_failed_text(f"FloodWait: {e.value}s"))
+            return
+        except Exception as e:
+            await message.reply_text(login_failed_text(str(e)))
             return
 
-    state = get_user_state(user_id)
+    if state == 'login_code' and not lowered.startswith('/cancel'):
+        code = text.replace(" ", "")
+        try:
+            me, phone = await finish_login_with_code(user_id, code)
+            await message.reply_text(login_success_text(phone))
+            return
+        except SessionPasswordNeeded:
+            await message.reply_text(ask_password_text())
+            return
+        except PhoneCodeInvalid:
+            await message.reply_text(login_failed_text("Invalid OTP / code."))
+            return
+        except Exception as e:
+            await message.reply_text(login_failed_text(str(e)))
+            return
+
+    if state == 'login_password' and not lowered.startswith('/cancel'):
+        try:
+            me, phone = await finish_login_with_password(user_id, text)
+            await message.reply_text(login_success_text(phone))
+            return
+        except PasswordHashInvalid:
+            await message.reply_text(login_failed_text("Wrong password."))
+            return
+        except Exception as e:
+            await message.reply_text(login_failed_text(str(e)))
+            return
+
+    # =========================
+    # V6 AUTHORIZED TASK PROCESSING
+    # =========================
+    if is_index_mode(user_id):
+        ignored_cmds = (
+            '/stop_index',
+            '/index_stats',
+            '/index_id',
+            '/settings',
+            '/cancel',
+            '/start',
+            '/help',
+            '/plan',
+            '/terms',
+            '/ping',
+            '/login',
+            '/login_status',
+            '/logout',
+            '/my_tasks',
+        )
+
+        if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
+            info = extract_telegram_link_info(text_raw)
+            if info:
+                await process_link_task(client, user_id, message, text_raw.strip())
+                return
+
+    # =========================
+    # SETTINGS INPUT STATES
+    # =========================
     if state and not lowered.startswith('/cancel'):
         setting_key = WAITING_KEYS.get(state)
+
         if setting_key == 'thumbnail_file_id':
             if message.photo:
-                update_user_settings(user_id, {'thumbnail_file_id': message.photo.file_id, 'thumbnail_enabled': True})
+                update_user_settings(
+                    user_id,
+                    {
+                        'thumbnail_file_id': message.photo.file_id,
+                        'thumbnail_enabled': True
+                    }
+                )
                 clear_user_state(user_id)
                 await message.reply_text('✅ Custom thumbnail save ho gaya.\n\n/settings bhejo dekhne ke liye.')
                 return
             else:
                 await message.reply_text('❌ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho.')
                 return
+
         if setting_key:
             update_user_settings(user_id, {setting_key: text})
+
             if setting_key == 'caption_text':
                 update_user_settings(user_id, {'caption_enabled': True})
+
             if setting_key.startswith('metadata_'):
                 update_user_settings(user_id, {'metadata_enabled': True})
+
             clear_user_state(user_id)
-            await message.reply_text(f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye.")
+            await message.reply_text(
+                f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye."
+            )
             return
 
+    # =========================
+    # ADMIN COMMANDS
+    # =========================
     if await handle_admin_commands(client, message, lowered):
         return
 
+    # =========================
+    # COMMON COMMANDS
+    # =========================
     if lowered.startswith('/cancel'):
         clear_user_state(user_id)
+        await cleanup_login_client(user_id)
         await message.reply_text('❌ Current input mode cancel kar diya gaya.')
         return
 
@@ -502,7 +1377,46 @@ async def catch_all(client, message):
         blocked = await check_force_sub(client, message)
         if blocked:
             return
-        await message.reply_text(settings_home_text(user_id), reply_markup=settings_home_buttons())
+        await message.reply_text(
+            settings_home_text(user_id),
+            reply_markup=settings_home_buttons(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if lowered.startswith('/login'):
+        blocked = await check_force_sub(client, message)
+        if blocked:
+            return
+
+        if has_user_session(user_id):
+            await message.reply_text(login_status_text(user_id))
+            return
+
+        set_user_state(user_id, 'login_phone')
+        await message.reply_text(ask_phone_text())
+        return
+
+    if lowered.startswith('/login_status'):
+        await message.reply_text(login_status_text(user_id))
+        return
+
+    if lowered.startswith('/logout'):
+        if has_user_session(user_id):
+            delete_user_session(user_id)
+            await cleanup_login_client(user_id)
+            await message.reply_text(logout_success_text())
+        else:
+            await message.reply_text(logout_missing_text())
+        return
+
+    if lowered.startswith('/my_tasks'):
+        tasks = get_user_tasks(user_id, limit=10)
+        await message.reply_text(
+            my_tasks_text(tasks),
+            reply_markup=my_tasks_buttons(),
+            disable_web_page_preview=True,
+        )
         return
 
     blocked = await check_force_sub(client, message)
@@ -510,4 +1424,3 @@ async def catch_all(client, message):
         return
 
     await message.reply_text(unknown_text())
-     

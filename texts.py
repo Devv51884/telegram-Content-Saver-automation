@@ -1,10 +1,16 @@
 from config import APP_NAME
-from storage import get_user_settings, get_index_user_count, index_count
+from storage import (
+    get_user_settings,
+    get_index_user_count,
+    index_count,
+    is_index_mode,
+    has_user_session,
+)
 
 
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V4**\n\n"
+        f"👋 Welcome to **{APP_NAME} V6**\n\n"
         "Ye Code Devil ka working structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
@@ -13,9 +19,13 @@ def start_text():
         "/plan - Roadmap dekho\n"
         "/terms - Rules dekho\n"
         "/settings - Personal settings kholo\n"
+        "/login - Telegram account login karo\n"
+        "/login_status - Login status dekho\n"
+        "/logout - Saved login remove karo\n"
+        "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V4:**\n"
-        "Advanced settings pages + indexing commands add ho gaye hain."
+        "**New in V6:**\n"
+        "Login/session system + realtime task processing + authorized access workflow."
     )
 
 
@@ -28,9 +38,17 @@ def help_text():
         "/plan - Aage ke versions me kya aayega dekhne ke liye\n"
         "/terms - Bot ke rules dekhne ke liye\n"
         "/settings - Personal settings panel kholne ke liye\n"
-        "/cancel - Current text input mode cancel karne ke liye\n\n"
+        "/login - Account login start karne ke liye\n"
+        "/login_status - Saved session status dekhne ke liye\n"
+        "/logout - Saved session remove karne ke liye\n"
+        "/my_tasks - Task history dekhne ke liye\n"
+        "/cancel - Current text input ya login flow cancel karne ke liye\n\n"
         "**Admin / Index Commands**\n"
-        "/stats\n/users\n/ban user_id\n/unban user_id\n/broadcast your message\n"
+        "/stats\n"
+        "/users\n"
+        "/ban user_id\n"
+        "/unban user_id\n"
+        "/broadcast your message\n"
         "/index_id - auto indexing on karo\n"
         "/stop_index - indexing off karo\n"
         "/index_stats - index stats dekho"
@@ -44,9 +62,10 @@ def plan_text():
         "✅ V2 - Settings panel basic version\n"
         "✅ V3 - Admin controls basic version\n"
         "✅ V4 - Advanced settings + indexing\n"
-        "🔜 V5 - Login/session system\n"
-        "🔜 V6 - Batch processing\n"
-        "🔜 V7 - Premium + advanced tools"
+        "✅ V5 - Auto index + destination upload + log channel\n"
+        "✅ V6 - Login/session system + realtime task processing\n"
+        "🔜 V7 - Better batch system\n"
+        "🔜 V8 - Premium + advanced tools"
     )
 
 
@@ -57,7 +76,8 @@ def terms_text():
         "2. Required channel join compulsory ho sakta hai.\n"
         "3. Spam ya abuse mat karo.\n"
         "4. Future versions me usage limits add ho sakti hain.\n"
-        "5. Code Devil community updates ke liye channels join rakho."
+        "5. Authorized access sirf wahi chalega jahan account ka valid access ho.\n"
+        "6. Code Devil community updates ke liye channels join rakho."
     )
 
 
@@ -65,16 +85,18 @@ def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         f"⚙️ **Settings for User**\n\n"
-        f"Upload Mode: **{s['upload_mode']}**\n"
-        f"Custom Thumbnail: **{'Exists' if s['thumbnail_file_id'] else 'None'}**\n"
-        f"Caption: **{'Enabled' if s['caption_enabled'] else 'Disabled'}**\n"
-        f"Prefix: **{s['prefix'] or 'None'}**\n"
-        f"Suffix: **{s['suffix'] or 'None'}**\n"
-        f"Auto Rename: **{s['auto_rename'] or 'None'}**\n"
-        f"Metadata: **{'Enabled' if s['metadata_enabled'] else 'Disabled'}**\n"
-        f"Upload Destination: **{s['upload_destination'] or 'None'}**\n"
-        f"Topic ID: **{s['topic_id'] or 'None'}**\n"
-        f"Replace Words: **{s['replace_words'] or 'None'}**\n\n"
+        f"Upload Mode: **{s.get('upload_mode', 'Telegram')}**\n"
+        f"Custom Thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
+        f"Caption: **{'Enabled' if s.get('caption_enabled') else 'Disabled'}**\n"
+        f"Prefix: **{s.get('prefix') or 'None'}**\n"
+        f"Suffix: **{s.get('suffix') or 'None'}**\n"
+        f"Auto Rename: **{s.get('auto_rename') or 'None'}**\n"
+        f"Metadata: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n"
+        f"Upload Destination: **{s.get('upload_destination') or 'None'}**\n"
+        f"Topic ID: **{s.get('topic_id') or 'None'}**\n"
+        f"Replace Words: **{s.get('replace_words') or 'None'}**\n"
+        f"Index Mode: **{'Enabled' if is_index_mode(user_id) else 'Disabled'}**\n"
+        f"Authorized Login: **{'Connected' if has_user_session(user_id) else 'Not Connected'}**\n\n"
         "Niche buttons se sab setting manage kar sakte ho."
     )
 
@@ -91,15 +113,15 @@ def thumbnail_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "🖼 **Thumbnail Setting**\n\n"
-        f"Current thumbnail: **{'Exists' if s['thumbnail_file_id'] else 'None'}**\n"
-        f"Thumbnail status: **{'Enabled' if s['thumbnail_enabled'] else 'Disabled'}**\n\n"
+        f"Current thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
+        f"Thumbnail status: **{'Enabled' if s.get('thumbnail_enabled') else 'Disabled'}**\n\n"
         "Send a photo to save it as custom thumbnail.\nTimeout: 60 sec"
     )
 
 
 def caption_text(user_id: int):
     s = get_user_settings(user_id)
-    current = s['caption_text'] or 'None'
+    current = s.get('caption_text') or 'None'
     return (
         "📝 **Caption Setting**\n\n"
         "Caption files ke niche custom text hota hai.\n\n"
@@ -124,7 +146,7 @@ def prefix_text(user_id: int):
         "Prefix = @Code_Devil\n\n"
         "Output:\n"
         "@Code_Devil Fast_And_Furious.mkv\n\n"
-        f"Current prefix: **{s['prefix'] or 'None'}**\n\n"
+        f"Current prefix: **{s.get('prefix') or 'None'}**\n\n"
         "Send Prefix. Timeout: 60 sec"
     )
 
@@ -138,7 +160,7 @@ def suffix_text(user_id: int):
         "Suffix = @Code_Devil\n\n"
         "Output:\n"
         "Fast_And_Furious @Code_Devil.mkv\n\n"
-        f"Current suffix: **{s['suffix'] or 'None'}**\n\n"
+        f"Current suffix: **{s.get('suffix') or 'None'}**\n\n"
         "Send Suffix. Timeout: 60 sec"
     )
 
@@ -148,7 +170,7 @@ def auto_rename_text(user_id: int):
     return (
         "✍️ **Auto Rename Setting**\n\n"
         "Yahan jo text doge, bot usse files ke naam me use karega.\n\n"
-        f"Current auto rename: **{s['auto_rename'] or 'None'}**\n\n"
+        f"Current auto rename: **{s.get('auto_rename') or 'None'}**\n\n"
         "Send Auto Rename value. Timeout: 60 sec"
     )
 
@@ -158,7 +180,9 @@ def destination_text(user_id: int):
     return (
         "📍 **Upload Destination Setting**\n\n"
         "Yahan chat id ya channel/group id set kar sakte ho.\n\n"
-        f"Current destination: **{s['upload_destination'] or 'None'}**\n\n"
+        "Example:\n"
+        "`-1001234567890`\n\n"
+        f"Current destination: **{s.get('upload_destination') or 'None'}**\n\n"
         "Send upload destination. Timeout: 60 sec"
     )
 
@@ -168,7 +192,7 @@ def topic_id_text(user_id: int):
     return (
         "🧵 **Topic ID Setting**\n\n"
         "Agar supergroup topics use kar rahe ho to topic id yahan set kar sakte ho.\n\n"
-        f"Current topic id: **{s['topic_id'] or 'None'}**\n\n"
+        f"Current topic id: **{s.get('topic_id') or 'None'}**\n\n"
         "Send Topic ID. Timeout: 60 sec"
     )
 
@@ -181,7 +205,7 @@ def replace_words_text(user_id: int):
         "old1:new1, old2:new2\n\n"
         "Sirf remove karna ho to:\n"
         "old1:, old2:\n\n"
-        f"Current replace words: **{s['replace_words'] or 'None'}**\n\n"
+        f"Current replace words: **{s.get('replace_words') or 'None'}**\n\n"
         "Send remove/replace rules. Timeout: 60 sec"
     )
 
@@ -190,11 +214,11 @@ def metadata_home_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "📦 **Metadata Setting**\n\n"
-        f"Metadata status: **{'Enabled' if s['metadata_enabled'] else 'Disabled'}**\n\n"
-        f"Video Title: **{s['metadata_video_title'] or 'None'}**\n"
-        f"Video Author: **{s['metadata_video_author'] or 'None'}**\n"
-        f"Audio Title: **{s['metadata_audio_title'] or 'None'}**\n"
-        f"Subtitle Title: **{s['metadata_subtitle_title'] or 'None'}**\n"
+        f"Metadata status: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n\n"
+        f"Video Title: **{s.get('metadata_video_title') or 'None'}**\n"
+        f"Video Author: **{s.get('metadata_video_author') or 'None'}**\n"
+        f"Audio Title: **{s.get('metadata_audio_title') or 'None'}**\n"
+        f"Subtitle Title: **{s.get('metadata_subtitle_title') or 'None'}**\n"
     )
 
 
@@ -216,6 +240,10 @@ def unknown_text():
         "/plan\n"
         "/terms\n"
         "/settings\n"
+        "/login\n"
+        "/login_status\n"
+        "/logout\n"
+        "/my_tasks\n"
         "/cancel"
     )
 
@@ -223,7 +251,9 @@ def unknown_text():
 def index_started_text(user_id: int):
     return (
         "🧠 **Index Mode On**\n\n"
-        "Ab jo bhi content / text / media tum bhejoge, bot usko auto index karega.\n\n"
+        "Ab jo bhi content / text / media tum bhejoge, bot usko auto index karega.\n"
+        "Agar destination set hai to waha auto upload bhi karega.\n"
+        "Agar log channel set hai to waha bhi save karega.\n\n"
         "Band karne ke liye /stop_index bhejo."
     )
 
@@ -241,3 +271,163 @@ def index_stats_text(user_id: int):
         f"Your indexed items: **{get_index_user_count(user_id)}**\n"
         f"Total indexed items: **{index_count()}**"
     )
+
+
+def index_info_text(user_id: int):
+    return (
+        "⚡ **Auto Index + Upload Mode**\n\n"
+        "Agar ON hai:\n"
+        "• Link / media / content bhejo\n"
+        "• Bot auto process karega\n"
+        "• Destination par upload karega\n"
+        "• Log channel me save karega\n\n"
+        "OFF karne ke liye /stop_index"
+    )
+
+
+# =========================
+# V6 LOGIN TEXTS
+# =========================
+
+def login_intro_text():
+    return (
+        "🔐 **Login System**\n\n"
+        "Yahan tum apna Telegram account authorize kar sakte ho.\n\n"
+        "**Flow:**\n"
+        "1. /login bhejo\n"
+        "2. Phone number bhejo\n"
+        "3. OTP bhejo\n"
+        "4. Agar 2-step password enabled hai to password bhejo\n\n"
+        "Cancel karne ke liye /cancel bhejo."
+    )
+
+
+def ask_phone_text():
+    return (
+        "📱 **Phone Number Bhejo**\n\n"
+        "Example:\n"
+        "`+919876543210`\n\n"
+        "Telegram account ka number international format me bhejo."
+    )
+
+
+def ask_code_text():
+    return (
+        "🔑 **OTP / Login Code Bhejo**\n\n"
+        "Telegram ne jo login code bheja hai woh yahan bhejo.\n\n"
+        "Example formats:\n"
+        "`12345`\n"
+        "`1 2 3 4 5`"
+    )
+
+
+def ask_password_text():
+    return (
+        "🔒 **2-Step Password Bhejo**\n\n"
+        "Tumhare Telegram account par cloud password enabled hai.\n"
+        "Apna password bhejo."
+    )
+
+
+def login_success_text(phone: str = ''):
+    phone_info = f"\n📱 Phone: `{phone}`" if phone else ""
+    return (
+        "✅ **Login Successful**\n\n"
+        "Tumhara Telegram account authorize ho gaya hai.\n"
+        "Ab authorized access workflow use kiya ja sakta hai."
+        f"{phone_info}"
+    )
+
+
+def login_failed_text(error: str):
+    return (
+        "❌ **Login Failed**\n\n"
+        f"Error:\n`{error}`\n\n"
+        "Dobara /login try karo."
+    )
+
+
+def login_status_text(user_id: int):
+    if has_user_session(user_id):
+        s = get_user_settings(user_id)
+        return (
+            "✅ **Login Status**\n\n"
+            "Authorized session connected hai.\n"
+            f"Last Login User ID: **{s.get('last_login_user_id') or 'Unknown'}**"
+        )
+
+    return (
+        "⚠️ **Login Status**\n\n"
+        "Abhi koi authorized session connected nahi hai.\n\n"
+        "Login karne ke liye /login bhejo."
+    )
+
+
+def logout_success_text():
+    return (
+        "🚪 **Logout Successful**\n\n"
+        "Saved session remove kar di gayi hai."
+    )
+
+
+def logout_missing_text():
+    return (
+        "⚠️ **Logout**\n\n"
+        "Abhi koi saved session mila hi nahi."
+    )
+
+
+# =========================
+# V6 TASK TEXTS
+# =========================
+
+def task_running_text(task: dict):
+    status = task.get('status', 'unknown')
+    source = task.get('source', 'unknown')
+    progress = task.get('progress_text', '')
+    destination = task.get('destination', 'Not Set')
+
+    text = (
+        f"⚡ **Task Running**\n\n"
+        f"**Status:** {status}\n"
+        f"**Source:** `{source}`\n"
+        f"**Destination:** `{destination}`"
+    )
+
+    if progress:
+        text += f"\n**Progress:** {progress}"
+
+    return text
+
+
+def task_completed_text(task: dict):
+    return (
+        "✅ **Task Completed**\n\n"
+        f"**Source:** `{task.get('source', 'unknown')}`\n"
+        f"**Destination:** `{task.get('destination', 'Not Set')}`"
+    )
+
+
+def task_failed_text(task: dict):
+    return (
+        "❌ **Task Failed**\n\n"
+        f"**Source:** `{task.get('source', 'unknown')}`\n"
+        f"**Error:** `{task.get('error', 'Unknown error')}`"
+    )
+
+
+def my_tasks_text(tasks: list):
+    if not tasks:
+        return (
+            "📂 **My Tasks**\n\n"
+            "Abhi koi task history nahi mili."
+        )
+
+    lines = ["📂 **My Tasks**\n"]
+    for i, task in enumerate(tasks[:10], start=1):
+        lines.append(
+            f"{i}. **{task.get('status', 'unknown')}** | "
+            f"`{task.get('source', 'unknown')}`"
+        )
+
+    return "\n".join(lines)

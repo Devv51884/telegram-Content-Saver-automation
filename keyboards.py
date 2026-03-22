@@ -14,6 +14,7 @@ def start_buttons():
         [InlineKeyboardButton('📢 Main Channel', url=MAIN_CHANNEL), InlineKeyboardButton('🛠 Updates', url=UPDATES_CHANNEL)],
         [InlineKeyboardButton('📚 Playlist', url=PLAYLIST_LINK), InlineKeyboardButton('▶️ YouTube', url=YOUTUBE_CHANNEL)],
         [InlineKeyboardButton('💬 WhatsApp', url=WHATSAPP_CHANNEL)],
+        [InlineKeyboardButton('🔐 Login', callback_data='show_login_info'), InlineKeyboardButton('⚙️ Settings', callback_data='show_settings_home')],
     ])
 
 
@@ -25,6 +26,8 @@ def settings_home_buttons():
         [InlineKeyboardButton('✍️ Auto Rename', callback_data='show_auto_rename'), InlineKeyboardButton('📦 Metadata', callback_data='show_metadata')],
         [InlineKeyboardButton('📍 Destination', callback_data='show_destination'), InlineKeyboardButton('🧵 Topic ID', callback_data='show_topic_id')],
         [InlineKeyboardButton('🔁 Replace Words', callback_data='show_replace_words')],
+        [InlineKeyboardButton('⚡ Auto Index', callback_data='show_index_settings')],
+        [InlineKeyboardButton('🔐 Login Status', callback_data='show_login_status')],
         [InlineKeyboardButton('♻️ Reset All', callback_data='reset_all_settings')],
     ])
 
@@ -81,4 +84,62 @@ def metadata_field_buttons(set_cb: str, remove_cb: str):
         [InlineKeyboardButton('✍️ Set Value', callback_data=set_cb)],
         [InlineKeyboardButton('🗑 Remove', callback_data=remove_cb)],
         [InlineKeyboardButton('⬅️ Back', callback_data='show_metadata'), InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
+def index_buttons(enabled: bool):
+    label = '✅ Index ON' if enabled else '❌ Index OFF'
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data='toggle_index_mode')],
+        [InlineKeyboardButton('📊 Index Stats', callback_data='show_index_stats')],
+        [InlineKeyboardButton('ℹ️ Info', callback_data='show_index_info')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'),
+         InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
+# =========================
+# V6 LOGIN BUTTONS
+# =========================
+
+def login_buttons(has_session: bool = False):
+    if has_session:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('📊 Login Status', callback_data='show_login_status')],
+            [InlineKeyboardButton('🚪 Logout', callback_data='do_logout')],
+            [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'),
+             InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+        ])
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('🔐 Start Login', callback_data='start_login_flow')],
+        [InlineKeyboardButton('📘 Login Guide', callback_data='show_login_info')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'),
+         InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
+# =========================
+# V6 TASK BUTTONS
+# =========================
+
+def task_buttons(task_id: str, done: bool = False):
+    if done:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('📂 My Tasks', callback_data='show_my_tasks')],
+            [InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+        ])
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('♻️ Refresh', callback_data=f'task_refresh:{task_id}')],
+        [InlineKeyboardButton('🛑 Cancel', callback_data=f'task_cancel:{task_id}')],
+        [InlineKeyboardButton('📂 My Tasks', callback_data='show_my_tasks')],
+    ])
+
+
+def my_tasks_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('♻️ Refresh', callback_data='show_my_tasks')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'),
+         InlineKeyboardButton('❌ Close', callback_data='close_settings')],
     ])

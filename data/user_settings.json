@@ -14,11 +14,11 @@
     "metadata_audio_title": "",
     "metadata_subtitle_title": "",
     "upload_destination": "",
-    "topic_id": "",
+    "topic_id": "001",
     "replace_words": "",
-    "thumbnail": false,
-    "caption": false,
-    "metadata": false
+    "index_mode": false,
+    "authorized_mode": true,
+    "last_login_user_id": 6747712268
   },
   "6949344152": {
     "upload_mode": "Telegram",
