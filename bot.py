@@ -2,12 +2,10 @@ import os
 import re
 import uuid
 import time
-import asyncio
 
 from pyrogram import Client, filters
 from pyrogram.errors import (
     UserNotParticipant,
-    RPCError,
     SessionPasswordNeeded,
     PhoneCodeInvalid,
     PasswordHashInvalid,
@@ -35,6 +33,7 @@ from keyboards import (
     submenu_nav,
     thumbnail_buttons,
     caption_buttons,
+    caption_index_buttons,
     simple_set_buttons,
     metadata_buttons,
     metadata_field_buttons,
@@ -42,6 +41,8 @@ from keyboards import (
     login_buttons,
     task_buttons,
     my_tasks_buttons,
+    auto_rename_buttons,
+    filename_index_buttons,
 )
 
 from texts import (
@@ -100,21 +101,17 @@ from storage import (
     unban_user,
     update_user_settings,
     user_count,
-
-    # V6 session helpers
     save_user_session,
     get_user_session_string,
     has_user_session,
     delete_user_session,
     set_login_temp,
     get_login_temp,
-
-    # V6 task helpers
     set_task,
     get_task,
-    delete_task,
     get_user_tasks,
     count_running_tasks,
+    format_index_number,
 )
 
 app = Client(
@@ -136,13 +133,10 @@ def normalize_target(target: str):
     target = (target or "").strip()
     if not target:
         return None
-
     if target.lstrip("-").isdigit():
         return int(target)
-
     if target.startswith("@"):
         return target
-
     return target
 
 
@@ -157,12 +151,113 @@ def make_task_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def build_final_caption(message, settings: dict):
-    original_caption = message.caption or ""
-    caption = original_caption
+def sanitize_filename(name: str) -> str:
+    if not name:
+        return "file"
+    for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
+        name = name.replace(ch, ' ')
+    return ' '.join(name.split()).strip() or "file"
 
+
+def split_filename_ext(filename: str):
+    filename = filename or ""
+    if "." in filename:
+        base, ext = os.path.splitext(filename)
+        return base, ext
+    return filename, ""
+
+
+def apply_replace_rules(value: str, rules: str) -> str:
+    value = value or ""
+    rules = (rules or "").strip()
+    if not rules:
+        return value
+
+    for part in rules.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            old, new = part.split(":", 1)
+            value = value.replace(old.strip(), new.strip())
+        else:
+            value = value.replace(part, "")
+    return " ".join(value.split()).strip()
+
+
+def build_template_context(source_msg, settings: dict, index_no: int = 0):
+    filename = ""
+    if source_msg.document and getattr(source_msg.document, "file_name", None):
+        filename = source_msg.document.file_name
+    elif source_msg.video and getattr(source_msg.video, "file_name", None):
+        filename = source_msg.video.file_name
+    elif source_msg.audio and getattr(source_msg.audio, "file_name", None):
+        filename = source_msg.audio.file_name
+    elif source_msg.photo:
+        filename = "photo.jpg"
+    elif source_msg.voice:
+        filename = "voice.ogg"
+    elif source_msg.animation:
+        filename = "animation.mp4"
+
+    filename = sanitize_filename(filename)
+    filename = apply_replace_rules(filename, settings.get("replace_words", ""))
+
+    caption_padding = int(settings.get("caption_index_padding", 2) or 2)
+    caption_start = int(settings.get("caption_index_start", 1) or 1)
+    filename_padding = int(settings.get("filename_index_padding", 2) or 2)
+    filename_start = int(settings.get("filename_index_start", 1) or 1)
+
+    caption_index_value = format_index_number(max(0, caption_start + max(0, index_no - 1)), caption_padding)
+    filename_index_value = format_index_number(max(0, filename_start + max(0, index_no - 1)), filename_padding)
+
+    size = ""
+    if source_msg.document:
+        size = str(getattr(source_msg.document, "file_size", "") or "")
+    elif source_msg.video:
+        size = str(getattr(source_msg.video, "file_size", "") or "")
+    elif source_msg.audio:
+        size = str(getattr(source_msg.audio, "file_size", "") or "")
+    elif source_msg.photo:
+        size = str(getattr(source_msg.photo, "file_size", "") or "")
+    elif source_msg.voice:
+        size = str(getattr(source_msg.voice, "file_size", "") or "")
+
+    duration = ""
+    if source_msg.video:
+        duration = str(getattr(source_msg.video, "duration", "") or "")
+    elif source_msg.audio:
+        duration = str(getattr(source_msg.audio, "duration", "") or "")
+    elif source_msg.voice:
+        duration = str(getattr(source_msg.voice, "duration", "") or "")
+
+    return {
+        "filename": filename,
+        "size": size,
+        "duration": duration,
+        "quality": "",
+        "language": "",
+        "subtitle": "",
+        "index": caption_index_value,
+        "fileindex": filename_index_value,
+    }
+
+
+def render_template(template: str, context: dict) -> str:
+    result = template or ""
+    for key, value in context.items():
+        result = result.replace("{" + key + "}", str(value))
+    return result
+
+
+def build_final_caption(source_msg, settings: dict, index_no: int = 0):
+    context = build_template_context(source_msg, settings, index_no=index_no)
+
+    caption = source_msg.caption or ""
     if settings.get("caption_enabled") and settings.get("caption_text"):
-        caption = settings.get("caption_text", "")
+        caption = render_template(settings.get("caption_text", ""), context)
+
+    caption = apply_replace_rules(caption, settings.get("replace_words", ""))
 
     prefix = settings.get("prefix", "").strip()
     suffix = settings.get("suffix", "").strip()
@@ -176,11 +271,14 @@ def build_final_caption(message, settings: dict):
     return caption
 
 
-def build_final_text(text: str, settings: dict):
-    value = text or ""
+def build_final_text(text: str, source_msg, settings: dict, index_no: int = 0):
+    context = build_template_context(source_msg, settings, index_no=index_no)
 
+    value = text or ""
     if settings.get("caption_enabled") and settings.get("caption_text"):
-        value = settings.get("caption_text", value)
+        value = render_template(settings.get("caption_text", value), context)
+
+    value = apply_replace_rules(value, settings.get("replace_words", ""))
 
     prefix = settings.get("prefix", "").strip()
     suffix = settings.get("suffix", "").strip()
@@ -191,6 +289,51 @@ def build_final_text(text: str, settings: dict):
         value = f"{value} {suffix}".strip()
 
     return value
+
+
+def build_final_filename(original_filename: str, settings: dict, index_no: int = 0):
+    original_filename = sanitize_filename(original_filename or "file")
+    original_filename = apply_replace_rules(original_filename, settings.get("replace_words", ""))
+
+    base, ext = split_filename_ext(original_filename)
+
+    filename_padding = int(settings.get("filename_index_padding", 2) or 2)
+    filename_start = int(settings.get("filename_index_start", 1) or 1)
+    filename_index_value = format_index_number(max(0, filename_start + max(0, index_no - 1)), filename_padding)
+
+    context = {
+        "filename": base,
+        "index": filename_index_value,
+    }
+
+    rename_template = (settings.get("rename_template") or "").strip()
+    auto_rename = (settings.get("auto_rename") or "").strip()
+
+    new_base = base
+
+    if rename_template:
+        new_base = render_template(rename_template, context).strip()
+    elif settings.get("auto_rename_enabled") and auto_rename:
+        if "{filename}" in auto_rename or "{index}" in auto_rename:
+            new_base = render_template(auto_rename, context).strip()
+        else:
+            new_base = auto_rename.strip()
+
+    if settings.get("filename_index_enabled") and "{index}" not in new_base:
+        new_base = f"{filename_index_value}_{new_base}".strip("_ ")
+
+    file_prefix = (settings.get("filename_prefix") or "").strip()
+    file_suffix = (settings.get("filename_suffix") or "").strip()
+
+    if file_prefix:
+        new_base = f"{file_prefix} {new_base}".strip()
+    if file_suffix:
+        new_base = f"{new_base} {file_suffix}".strip()
+
+    new_base = apply_replace_rules(new_base, settings.get("replace_words", ""))
+    new_base = sanitize_filename(new_base)
+
+    return f"{new_base}{ext}"
 
 
 async def update_task_status_message(client, task_id: str, done: bool = False):
@@ -335,11 +478,6 @@ def parse_index_entry(message):
 
 
 def extract_telegram_link_info(text: str):
-    """
-    Supports:
-    https://t.me/channelusername/123
-    https://t.me/c/123456789/456
-    """
     if not text:
         return None
 
@@ -388,6 +526,26 @@ def get_temp_download_path(source_msg):
     return os.path.join(TEMP_DIR, f"{base_name}.bin")
 
 
+def rename_downloaded_file(file_path: str, source_msg, settings: dict, index_no: int = 0):
+    if not file_path or not os.path.exists(file_path):
+        return file_path
+
+    original_name = os.path.basename(file_path)
+    final_name = build_final_filename(original_name, settings, index_no=index_no)
+    final_path = os.path.join(os.path.dirname(file_path), final_name)
+
+    if final_path == file_path:
+        return file_path
+
+    try:
+        if os.path.exists(final_path):
+            os.remove(final_path)
+        os.rename(file_path, final_path)
+        return final_path
+    except Exception:
+        return file_path
+
+
 async def get_authorized_client_for_user(user_id: int):
     session_string = get_user_session_string(user_id)
     if not session_string:
@@ -409,7 +567,6 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
     if not info:
         return None, None, None
 
-    # First try via bot client
     try:
         msg = await bot_client.get_messages(info["chat_id"], info["message_id"])
         if msg:
@@ -417,7 +574,6 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
     except Exception:
         pass
 
-    # Then try via authorized user session
     if has_user_session(user_id):
         user_client = await get_authorized_client_for_user(user_id)
         try:
@@ -431,8 +587,8 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
     return None, info, None
 
 
-async def upload_file_to_target(client, task_id: str, target, file_path: str, source_msg, settings: dict):
-    caption = build_final_caption(source_msg, settings)
+async def upload_file_to_target(client, task_id: str, target, file_path: str, source_msg, settings: dict, index_no: int = 0):
+    caption = build_final_caption(source_msg, settings, index_no=index_no)
     topic_id = safe_topic_id(settings.get("topic_id", ""))
 
     if source_msg.photo:
@@ -485,9 +641,9 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
     )
 
 
-async def send_text_to_target(client, target, source_msg, settings: dict):
+async def send_text_to_target(client, target, source_msg, settings: dict, index_no: int = 0):
     topic_id = safe_topic_id(settings.get("topic_id", ""))
-    final_text = build_final_text(source_msg.text or source_msg.caption or "", settings)
+    final_text = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no)
 
     return await client.send_message(
         chat_id=target,
@@ -584,16 +740,15 @@ async def process_link_task(client, user_id: int, message, link_text: str):
         idx_no = add_index_entry(entry)
         user_count_now = increase_index_user_count(user_id)
 
-        # Text only
         if not (source_msg.photo or source_msg.video or source_msg.document or source_msg.audio or source_msg.voice or source_msg.animation):
             set_task(task_id, {"status": "uploading", "progress_text": "Sending text/message..."})
             await update_task_status_message(client, task_id)
 
             if destination:
-                await send_text_to_target(client, destination, source_msg, settings)
+                await send_text_to_target(client, destination, source_msg, settings, index_no=idx_no)
 
             if LOG_CHANNEL:
-                await send_text_to_target(client, LOG_CHANNEL, source_msg, settings)
+                await send_text_to_target(client, LOG_CHANNEL, source_msg, settings, index_no=idx_no)
 
             set_task(task_id, {
                 "status": "completed",
@@ -602,7 +757,7 @@ async def process_link_task(client, user_id: int, message, link_text: str):
             await update_task_status_message(client, task_id, done=True)
 
             await message.reply_text(
-                f'⚡ **Auto Link Process Done (V6)**\n\n'
+                f'⚡ **Auto Link Process Done (V7)**\n\n'
                 f'📚 Index No: **{idx_no}**\n'
                 f'📦 Type: **{entry["content_type"]}**\n'
                 f'📊 Your Total Indexed: **{user_count_now}**\n'
@@ -611,7 +766,6 @@ async def process_link_task(client, user_id: int, message, link_text: str):
             )
             return
 
-        # Download media
         set_task(task_id, {"status": "downloading", "progress_text": "Starting download..."})
         await update_task_status_message(client, task_id)
 
@@ -625,15 +779,16 @@ async def process_link_task(client, user_id: int, message, link_text: str):
             progress_args=(client, task_id, "downloading"),
         )
 
-        # Upload media
+        download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=idx_no)
+
         set_task(task_id, {"status": "uploading", "progress_text": "Preparing upload..."})
         await update_task_status_message(client, task_id)
 
         if destination:
-            await upload_file_to_target(client, task_id, destination, download_path, source_msg, settings)
+            await upload_file_to_target(client, task_id, destination, download_path, source_msg, settings, index_no=idx_no)
 
         if LOG_CHANNEL:
-            await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, settings)
+            await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, settings, index_no=idx_no)
 
         set_task(task_id, {
             "status": "completed",
@@ -642,7 +797,7 @@ async def process_link_task(client, user_id: int, message, link_text: str):
         await update_task_status_message(client, task_id, done=True)
 
         await message.reply_text(
-            f'⚡ **Auto Link Process Done (V6)**\n\n'
+            f'⚡ **Auto Link Process Done (V7)**\n\n'
             f'📚 Index No: **{idx_no}**\n'
             f'📦 Type: **{entry["content_type"]}**\n'
             f'📊 Your Total Indexed: **{user_count_now}**\n'
@@ -855,7 +1010,6 @@ async def all_callbacks(client, callback_query):
 
     s = get_user_settings(user_id)
 
-    # =============== V6 TASK BUTTONS ===============
     if data.startswith('task_refresh:'):
         task_id = data.split(':', 1)[1]
         await update_task_status_message(client, task_id, done=get_task(task_id).get("status") in {"completed", "failed", "cancelled"})
@@ -884,7 +1038,6 @@ async def all_callbacks(client, callback_query):
         await callback_query.answer()
         return
 
-    # =============== V6 LOGIN BUTTONS ===============
     elif data == 'show_login_info':
         try:
             await callback_query.message.edit_text(
@@ -946,10 +1099,9 @@ async def all_callbacks(client, callback_query):
         await callback_query.answer()
         return
 
-    # =============== EXISTING SETTINGS ===============
     if data == 'show_settings_home':
         text = settings_home_text(user_id)
-        kb = settings_home_buttons()
+        kb = settings_home_buttons(has_user_session(user_id))
 
     elif data == 'show_upload_mode':
         text = upload_mode_text()
@@ -986,9 +1138,31 @@ async def all_callbacks(client, callback_query):
         text = caption_text(user_id)
         kb = caption_buttons(s['caption_enabled'])
 
+    elif data == 'show_caption_index_settings':
+        text = caption_text(user_id)
+        kb = caption_index_buttons(s.get('caption_index_enabled', True))
+
+    elif data == 'toggle_caption_index_enabled':
+        s['caption_index_enabled'] = not s.get('caption_index_enabled', True)
+        update_user_settings(user_id, s)
+        text = caption_text(user_id)
+        kb = caption_index_buttons(s.get('caption_index_enabled', True))
+
+    elif data == 'set_caption_index_padding':
+        set_user_state(user_id, 'set_caption_index_padding')
+        await callback_query.message.reply_text('🔢 Ab caption index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'set_caption_index_start':
+        set_user_state(user_id, 'set_caption_index_start')
+        await callback_query.message.reply_text('🚀 Ab caption index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
     elif data == 'set_caption_text':
         set_user_state(user_id, 'set_caption_text')
-        await callback_query.message.reply_text('📝 Ab custom caption bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.message.reply_text('📝 Ab custom caption bhejo.\n{index} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
 
@@ -1029,18 +1203,71 @@ async def all_callbacks(client, callback_query):
 
     elif data == 'show_auto_rename':
         text = auto_rename_text(user_id)
-        kb = simple_set_buttons('set_auto_rename', 'remove_auto_rename')
+        kb = auto_rename_buttons(s.get('auto_rename_enabled', False))
+
+    elif data == 'toggle_auto_rename_enabled':
+        s['auto_rename_enabled'] = not s.get('auto_rename_enabled', False)
+        update_user_settings(user_id, s)
+        text = auto_rename_text(user_id)
+        kb = auto_rename_buttons(s.get('auto_rename_enabled', False))
 
     elif data == 'set_auto_rename':
         set_user_state(user_id, 'set_auto_rename')
-        await callback_query.message.reply_text('✍️ Ab auto rename value bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.message.reply_text('✍️ Ab simple auto rename value bhejo.\n{index} aur {filename} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'set_rename_template':
+        set_user_state(user_id, 'set_rename_template')
+        await callback_query.message.reply_text('🧩 Ab rename template bhejo.\nExample: Movie_{index}\nYa: {index}_{filename}\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'set_filename_prefix':
+        set_user_state(user_id, 'set_filename_prefix')
+        await callback_query.message.reply_text('🏷 Ab filename prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'set_filename_suffix':
+        set_user_state(user_id, 'set_filename_suffix')
+        await callback_query.message.reply_text('🔖 Ab filename suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'show_filename_index_settings':
+        text = auto_rename_text(user_id)
+        kb = filename_index_buttons(s.get('filename_index_enabled', False))
+
+    elif data == 'toggle_filename_index_enabled':
+        s['filename_index_enabled'] = not s.get('filename_index_enabled', False)
+        update_user_settings(user_id, s)
+        text = auto_rename_text(user_id)
+        kb = filename_index_buttons(s.get('filename_index_enabled', False))
+
+    elif data == 'set_filename_index_padding':
+        set_user_state(user_id, 'set_filename_index_padding')
+        await callback_query.message.reply_text('🔢 Ab filename index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.answer()
+        return
+
+    elif data == 'set_filename_index_start':
+        set_user_state(user_id, 'set_filename_index_start')
+        await callback_query.message.reply_text('🚀 Ab filename index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
 
     elif data == 'remove_auto_rename':
-        update_user_settings(user_id, {'auto_rename': ''})
+        update_user_settings(user_id, {
+            'auto_rename': '',
+            'rename_template': '',
+            'filename_prefix': '',
+            'filename_suffix': '',
+            'auto_rename_enabled': False,
+            'filename_index_enabled': False,
+        })
         text = auto_rename_text(user_id)
-        kb = simple_set_buttons('set_auto_rename', 'remove_auto_rename')
+        kb = auto_rename_buttons(False)
 
     elif data == 'show_destination':
         text = destination_text(user_id)
@@ -1078,7 +1305,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == 'set_replace_words':
         set_user_state(user_id, 'set_replace_words')
-        await callback_query.message.reply_text('🔁 Ab remove/replace rules bhejo.\n\n/cancel bhej kar cancel kar sakte ho.')
+        await callback_query.message.reply_text('🔁 Ab remove/replace rules bhejo.\nExample: old:new, test:\n\n/cancel bhej kar cancel kar sakte ho.')
         await callback_query.answer()
         return
 
@@ -1165,7 +1392,7 @@ async def all_callbacks(client, callback_query):
         current = is_index_mode(user_id)
         set_index_mode(user_id, not current)
         text = settings_home_text(user_id)
-        kb = settings_home_buttons()
+        kb = settings_home_buttons(has_user_session(user_id))
 
     elif data == 'show_index_stats':
         text = index_stats_text(user_id)
@@ -1179,7 +1406,7 @@ async def all_callbacks(client, callback_query):
         reset_user_settings(user_id)
         clear_user_state(user_id)
         text = settings_home_text(user_id)
-        kb = settings_home_buttons()
+        kb = settings_home_buttons(has_user_session(user_id))
 
     elif data == 'close_settings':
         try:
@@ -1215,9 +1442,6 @@ async def catch_all(client, message):
 
     state = get_user_state(user_id)
 
-    # =========================
-    # V6 LOGIN FLOW
-    # =========================
     if state == 'login_phone' and not lowered.startswith('/cancel'):
         phone = text.replace(" ", "")
         try:
@@ -1262,9 +1486,6 @@ async def catch_all(client, message):
             await message.reply_text(login_failed_text(str(e)))
             return
 
-    # =========================
-    # V6 AUTHORIZED TASK PROCESSING
-    # =========================
     if is_index_mode(user_id):
         ignored_cmds = (
             '/stop_index',
@@ -1289,9 +1510,6 @@ async def catch_all(client, message):
                 await process_link_task(client, user_id, message, text_raw.strip())
                 return
 
-    # =========================
-    # SETTINGS INPUT STATES
-    # =========================
     if state and not lowered.startswith('/cancel'):
         setting_key = WAITING_KEYS.get(state)
 
@@ -1312,10 +1530,26 @@ async def catch_all(client, message):
                 return
 
         if setting_key:
-            update_user_settings(user_id, {setting_key: text})
+            value = text
+
+            if setting_key in {
+                'caption_index_padding',
+                'caption_index_start',
+                'filename_index_padding',
+                'filename_index_start',
+            }:
+                if not value.isdigit():
+                    await message.reply_text('❌ Yahan sirf number bhejo.\n/cancel bhej kar cancel kar sakte ho.')
+                    return
+                value = int(value)
+
+            update_user_settings(user_id, {setting_key: value})
 
             if setting_key == 'caption_text':
                 update_user_settings(user_id, {'caption_enabled': True})
+
+            if setting_key in {'auto_rename', 'rename_template', 'filename_prefix', 'filename_suffix'}:
+                update_user_settings(user_id, {'auto_rename_enabled': True})
 
             if setting_key.startswith('metadata_'):
                 update_user_settings(user_id, {'metadata_enabled': True})
@@ -1326,15 +1560,9 @@ async def catch_all(client, message):
             )
             return
 
-    # =========================
-    # ADMIN COMMANDS
-    # =========================
     if await handle_admin_commands(client, message, lowered):
         return
 
-    # =========================
-    # COMMON COMMANDS
-    # =========================
     if lowered.startswith('/cancel'):
         clear_user_state(user_id)
         await cleanup_login_client(user_id)
@@ -1349,7 +1577,11 @@ async def catch_all(client, message):
         blocked = await check_force_sub(client, message)
         if blocked:
             return
-        await message.reply_text(start_text(), reply_markup=start_buttons(), disable_web_page_preview=True)
+        await message.reply_text(
+            start_text(),
+            reply_markup=start_buttons(has_user_session(user_id)),
+            disable_web_page_preview=True,
+        )
         return
 
     if lowered.startswith('/help'):
@@ -1379,7 +1611,7 @@ async def catch_all(client, message):
             return
         await message.reply_text(
             settings_home_text(user_id),
-            reply_markup=settings_home_buttons(),
+            reply_markup=settings_home_buttons(has_user_session(user_id)),
             disable_web_page_preview=True,
         )
         return
@@ -1390,7 +1622,7 @@ async def catch_all(client, message):
             return
 
         if has_user_session(user_id):
-            await message.reply_text(login_status_text(user_id))
+            await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(True))
             return
 
         set_user_state(user_id, 'login_phone')
@@ -1398,16 +1630,16 @@ async def catch_all(client, message):
         return
 
     if lowered.startswith('/login_status'):
-        await message.reply_text(login_status_text(user_id))
+        await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(has_user_session(user_id)))
         return
 
     if lowered.startswith('/logout'):
         if has_user_session(user_id):
             delete_user_session(user_id)
             await cleanup_login_client(user_id)
-            await message.reply_text(logout_success_text())
+            await message.reply_text(logout_success_text(), reply_markup=login_buttons(False))
         else:
-            await message.reply_text(logout_missing_text())
+            await message.reply_text(logout_missing_text(), reply_markup=login_buttons(False))
         return
 
     if lowered.startswith('/my_tasks'):

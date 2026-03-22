@@ -201,5 +201,35 @@
     "link_type": "private",
     "index_no": 15,
     "indexed_at": "2026-03-22T14:57:55.836887"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002102477197,
+    "message_id": 340,
+    "content_type": "document",
+    "text": "",
+    "caption": "",
+    "file_id": "BQACAgUAAx0CfVFBjQACAVRpwB1VkBnyI52SO3FwEI-sDNibHAACtwwAAidPaFazSQJWLVxorB4E",
+    "file_name": "Doubts with Lakshay Bhaiya [Week 6].pdf",
+    "file_size": 8845948,
+    "source_link": "https://t.me/c/2102477197/340",
+    "link_type": "private",
+    "index_no": 16,
+    "indexed_at": "2026-03-22T16:48:22.387602"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002102477197,
+    "message_id": 340,
+    "content_type": "document",
+    "text": "",
+    "caption": "",
+    "file_id": "BQACAgUAAx0CfVFBjQACAVRpwB5BtC7AEYLgH0CfwqsOBwRDfwACtwwAAidPaFazSQJWLVxorB4E",
+    "file_name": "Doubts with Lakshay Bhaiya [Week 6].pdf",
+    "file_size": 8845948,
+    "source_link": "https://t.me/c/2102477197/340",
+    "link_type": "private",
+    "index_no": 17,
+    "indexed_at": "2026-03-22T16:52:17.840682"
   }
 ]

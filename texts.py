@@ -10,7 +10,7 @@ from storage import (
 
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V6**\n\n"
+        f"👋 Welcome to **{APP_NAME} V7**\n\n"
         "Ye Code Devil ka working structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
@@ -24,8 +24,8 @@ def start_text():
         "/logout - Saved login remove karo\n"
         "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V6:**\n"
-        "Login/session system + realtime task processing + authorized access workflow."
+        "**New in V7:**\n"
+        "Dynamic login/logout UI + advanced caption formatting + {index} support + better auto rename options."
     )
 
 
@@ -51,7 +51,11 @@ def help_text():
         "/broadcast your message\n"
         "/index_id - auto indexing on karo\n"
         "/stop_index - indexing off karo\n"
-        "/index_stats - index stats dekho"
+        "/index_stats - index stats dekho\n\n"
+        "**Caption Variables**\n"
+        "{filename}, {size}, {duration}, {quality}, {language}, {subtitle}, {index}\n\n"
+        "**Rename Variables**\n"
+        "{filename}, {index}"
     )
 
 
@@ -64,8 +68,9 @@ def plan_text():
         "✅ V4 - Advanced settings + indexing\n"
         "✅ V5 - Auto index + destination upload + log channel\n"
         "✅ V6 - Login/session system + realtime task processing\n"
-        "🔜 V7 - Better batch system\n"
-        "🔜 V8 - Premium + advanced tools"
+        "✅ V7 - Dynamic login/logout UI + advanced caption + advanced auto rename\n"
+        "🔜 V8 - Better batch system\n"
+        "🔜 V9 - Premium + advanced tools"
     )
 
 
@@ -83,6 +88,8 @@ def terms_text():
 
 def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
+    login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
+
     return (
         f"⚙️ **Settings for User**\n\n"
         f"Upload Mode: **{s.get('upload_mode', 'Telegram')}**\n"
@@ -91,12 +98,15 @@ def settings_home_text(user_id: int):
         f"Prefix: **{s.get('prefix') or 'None'}**\n"
         f"Suffix: **{s.get('suffix') or 'None'}**\n"
         f"Auto Rename: **{s.get('auto_rename') or 'None'}**\n"
+        f"Rename Template: **{s.get('rename_template') or 'None'}**\n"
+        f"Filename Prefix: **{s.get('filename_prefix') or 'None'}**\n"
+        f"Filename Suffix: **{s.get('filename_suffix') or 'None'}**\n"
         f"Metadata: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n"
         f"Upload Destination: **{s.get('upload_destination') or 'None'}**\n"
         f"Topic ID: **{s.get('topic_id') or 'None'}**\n"
         f"Replace Words: **{s.get('replace_words') or 'None'}**\n"
         f"Index Mode: **{'Enabled' if is_index_mode(user_id) else 'Disabled'}**\n"
-        f"Authorized Login: **{'Connected' if has_user_session(user_id) else 'Not Connected'}**\n\n"
+        f"Authorized Login: **{login_status}**\n\n"
         "Niche buttons se sab setting manage kar sakte ho."
     )
 
@@ -104,8 +114,8 @@ def settings_home_text(user_id: int):
 def upload_mode_text():
     return (
         "📤 **Upload Mode**\n\n"
-        "Abhi bot me upload mode fixed **Telegram** rakha gaya hai, jaisa tumne bola tha.\n\n"
-        "Aage future version me aur modes add kiye ja sakte hain."
+        "Abhi bot me upload mode fixed **Telegram** rakha gaya hai.\n\n"
+        "Future version me aur modes add kiye ja sakte hain."
     )
 
 
@@ -122,18 +132,34 @@ def thumbnail_text(user_id: int):
 def caption_text(user_id: int):
     s = get_user_settings(user_id)
     current = s.get('caption_text') or 'None'
+    padding = s.get('caption_index_padding', 2)
+    start = s.get('caption_index_start', 1)
+
     return (
         "📝 **Caption Setting**\n\n"
-        "Caption files ke niche custom text hota hai.\n\n"
+        "Caption uploaded file ke niche custom text hota hai.\n\n"
         "**Variables use kar sakte ho:**\n"
         "{filename} - File name\n"
         "{size} - File size\n"
         "{duration} - Duration\n"
         "{quality} - Quality\n"
         "{language} - Language\n"
-        "{subtitle} - Subtitle\n\n"
+        "{subtitle} - Subtitle\n"
+        "{index} - Auto index number\n\n"
+        "**{index} Example:**\n"
+        f"Current padding: **{padding}**\n"
+        f"Current start: **{start}**\n"
+        "Output example: `01`, `02`, `03`\n\n"
+        "**HTML formatting examples:**\n"
+        "<b>Bold</b>\n"
+        "<i>Italic</i>\n"
+        "<u>Underline</u>\n"
+        "<code>Monospace</code>\n"
+        "<a href='https://t.me/Code_Devil'>Link</a>\n\n"
         f"Current caption:\n`{current}`\n\n"
-        "HTML tags bhi use kar sakte ho. Timeout: 60 sec"
+        "Example caption:\n"
+        "`<b>{index}</b> | {filename}`\n\n"
+        "HTML tags use kar sakte ho. Timeout: 60 sec"
     )
 
 
@@ -169,8 +195,23 @@ def auto_rename_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "✍️ **Auto Rename Setting**\n\n"
-        "Yahan jo text doge, bot usse files ke naam me use karega.\n\n"
+        "Yahan tum filename ko advanced tareeke se control kar sakte ho.\n\n"
+        "**Simple Mode:**\n"
+        "auto_rename me jo text doge, bot usko filename me use karega.\n\n"
+        "**Advanced Variables:**\n"
+        "{filename} - Original filename\n"
+        "{index} - Auto index number\n\n"
+        "**Advanced Fields:**\n"
+        f"Rename Template: **{s.get('rename_template') or 'None'}**\n"
+        f"Filename Prefix: **{s.get('filename_prefix') or 'None'}**\n"
+        f"Filename Suffix: **{s.get('filename_suffix') or 'None'}**\n"
+        f"Filename Index Enabled: **{'Yes' if s.get('filename_index_enabled') else 'No'}**\n"
+        f"Filename Index Padding: **{s.get('filename_index_padding', 2)}**\n"
+        f"Filename Index Start: **{s.get('filename_index_start', 1)}**\n\n"
         f"Current auto rename: **{s.get('auto_rename') or 'None'}**\n\n"
+        "Example rename template:\n"
+        "`Movie_{index}`\n"
+        "`{index}_{filename}`\n\n"
         "Send Auto Rename value. Timeout: 60 sec"
     )
 
@@ -206,6 +247,7 @@ def replace_words_text(user_id: int):
         "Sirf remove karna ho to:\n"
         "old1:, old2:\n\n"
         f"Current replace words: **{s.get('replace_words') or 'None'}**\n\n"
+        "Ye filename aur caption dono cleaning me use ho sakta hai.\n"
         "Send remove/replace rules. Timeout: 60 sec"
     )
 
@@ -280,13 +322,14 @@ def index_info_text(user_id: int):
         "• Link / media / content bhejo\n"
         "• Bot auto process karega\n"
         "• Destination par upload karega\n"
-        "• Log channel me save karega\n\n"
+        "• Log channel me save karega\n"
+        "• {index} caption aur rename me use ho sakta hai\n\n"
         "OFF karne ke liye /stop_index"
     )
 
 
 # =========================
-# V6 LOGIN TEXTS
+# LOGIN TEXTS
 # =========================
 
 def login_intro_text():
@@ -378,7 +421,7 @@ def logout_missing_text():
 
 
 # =========================
-# V6 TASK TEXTS
+# TASK TEXTS
 # =========================
 
 def task_running_text(task: dict):

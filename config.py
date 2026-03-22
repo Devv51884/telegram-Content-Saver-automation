@@ -37,23 +37,22 @@ DEFAULT_DESTINATION = (
 )
 
 # =========================
-# V6 LOGIN / USER SESSION
+# LOGIN / USER SESSION
 # =========================
-# Single-owner authorized session string
 STRING_SESSION = os.getenv('STRING_SESSION', '').strip()
-
-# Optional per-user sessions file
 SESSION_STORE_FILE = os.getenv('SESSION_STORE_FILE', 'data/user_sessions.json')
 
 # =========================
-# V6 TASK / TEMP SETTINGS
+# TASK / TEMP SETTINGS
 # =========================
 TEMP_DIR = os.getenv('TEMP_DIR', 'temp')
 MAX_TASKS_PER_USER = int(os.getenv('MAX_TASKS_PER_USER', '3'))
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv('MAX_CONCURRENT_DOWNLOADS', '2'))
 TASKS_FILE = os.getenv('TASKS_FILE', 'data/tasks.json')
 
-# Base data directory
+# =========================
+# BASE DATA
+# =========================
 DATA_DIR = os.getenv('DATA_DIR', 'data')
 
 SETTINGS_FILE = os.path.join(DATA_DIR, 'user_settings.json')
@@ -63,7 +62,7 @@ BANNED_FILE = os.path.join(DATA_DIR, 'banned_users.json')
 INDEX_FILE = os.path.join(DATA_DIR, 'index_store.json')
 INDEX_STATE_FILE = os.path.join(DATA_DIR, 'index_state.json')
 
-SESSION_NAME = os.getenv('SESSION_NAME', 'code_devil_v6_structured')
+SESSION_NAME = os.getenv('SESSION_NAME', 'code_devil_v7_structured')
 
 # Ensure folders exist
 os.makedirs(DATA_DIR, exist_ok=True)

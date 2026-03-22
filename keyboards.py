@@ -9,16 +9,28 @@ def join_required_buttons():
     ])
 
 
-def start_buttons():
+def start_buttons(has_session: bool = False):
+    auth_button = (
+        InlineKeyboardButton('🚪 Logout', callback_data='do_logout')
+        if has_session
+        else InlineKeyboardButton('🔐 Login', callback_data='show_login_info')
+    )
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton('📢 Main Channel', url=MAIN_CHANNEL), InlineKeyboardButton('🛠 Updates', url=UPDATES_CHANNEL)],
         [InlineKeyboardButton('📚 Playlist', url=PLAYLIST_LINK), InlineKeyboardButton('▶️ YouTube', url=YOUTUBE_CHANNEL)],
         [InlineKeyboardButton('💬 WhatsApp', url=WHATSAPP_CHANNEL)],
-        [InlineKeyboardButton('🔐 Login', callback_data='show_login_info'), InlineKeyboardButton('⚙️ Settings', callback_data='show_settings_home')],
+        [auth_button, InlineKeyboardButton('⚙️ Settings', callback_data='show_settings_home')],
     ])
 
 
-def settings_home_buttons():
+def settings_home_buttons(has_session: bool = False):
+    auth_button = (
+        InlineKeyboardButton('🚪 Logout', callback_data='do_logout')
+        if has_session
+        else InlineKeyboardButton('🔐 Login', callback_data='show_login_info')
+    )
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton('📤 Upload Mode', callback_data='show_upload_mode')],
         [InlineKeyboardButton('🖼 Thumbnail', callback_data='show_thumbnail'), InlineKeyboardButton('📝 Caption', callback_data='show_caption')],
@@ -27,7 +39,7 @@ def settings_home_buttons():
         [InlineKeyboardButton('📍 Destination', callback_data='show_destination'), InlineKeyboardButton('🧵 Topic ID', callback_data='show_topic_id')],
         [InlineKeyboardButton('🔁 Replace Words', callback_data='show_replace_words')],
         [InlineKeyboardButton('⚡ Auto Index', callback_data='show_index_settings')],
-        [InlineKeyboardButton('🔐 Login Status', callback_data='show_login_status')],
+        [auth_button, InlineKeyboardButton('📊 Login Status', callback_data='show_login_status')],
         [InlineKeyboardButton('♻️ Reset All', callback_data='reset_all_settings')],
     ])
 
@@ -53,8 +65,19 @@ def caption_buttons(enabled: bool):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data='toggle_caption_enabled')],
         [InlineKeyboardButton('✍️ Set Caption', callback_data='set_caption_text')],
+        [InlineKeyboardButton('🔢 Index Format', callback_data='show_caption_index_settings')],
         [InlineKeyboardButton('🗑 Remove Caption', callback_data='remove_caption')],
         [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'), InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
+def caption_index_buttons(enabled: bool):
+    label = '✅ {index} On' if enabled else '❌ {index} Off'
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data='toggle_caption_index_enabled')],
+        [InlineKeyboardButton('🔢 Set Padding', callback_data='set_caption_index_padding')],
+        [InlineKeyboardButton('🚀 Set Start', callback_data='set_caption_index_start')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_caption'), InlineKeyboardButton('❌ Close', callback_data='close_settings')],
     ])
 
 
@@ -98,8 +121,34 @@ def index_buttons(enabled: bool):
     ])
 
 
+def auto_rename_buttons(enabled: bool):
+    label = '✅ Auto Rename On' if enabled else '❌ Auto Rename Off'
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data='toggle_auto_rename_enabled')],
+        [InlineKeyboardButton('✍️ Simple Rename', callback_data='set_auto_rename')],
+        [InlineKeyboardButton('🧩 Rename Template', callback_data='set_rename_template')],
+        [InlineKeyboardButton('🏷 Filename Prefix', callback_data='set_filename_prefix'),
+         InlineKeyboardButton('🔖 Filename Suffix', callback_data='set_filename_suffix')],
+        [InlineKeyboardButton('🔢 Filename Index', callback_data='show_filename_index_settings')],
+        [InlineKeyboardButton('🗑 Remove Rename', callback_data='remove_auto_rename')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_settings_home'),
+         InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
+def filename_index_buttons(enabled: bool):
+    label = '✅ Filename {index} On' if enabled else '❌ Filename {index} Off'
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data='toggle_filename_index_enabled')],
+        [InlineKeyboardButton('🔢 Set Padding', callback_data='set_filename_index_padding')],
+        [InlineKeyboardButton('🚀 Set Start', callback_data='set_filename_index_start')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='show_auto_rename'),
+         InlineKeyboardButton('❌ Close', callback_data='close_settings')],
+    ])
+
+
 # =========================
-# V6 LOGIN BUTTONS
+# LOGIN BUTTONS
 # =========================
 
 def login_buttons(has_session: bool = False):
@@ -120,7 +169,7 @@ def login_buttons(has_session: bool = False):
 
 
 # =========================
-# V6 TASK BUTTONS
+# TASK BUTTONS
 # =========================
 
 def task_buttons(task_id: str, done: bool = False):

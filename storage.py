@@ -14,23 +14,50 @@ from config import (
 
 DEFAULT_SETTINGS = {
     'upload_mode': 'Telegram',
+
+    # Thumbnail
     'thumbnail_enabled': False,
     'thumbnail_file_id': '',
+
+    # Caption
     'caption_enabled': False,
     'caption_text': '',
+    'caption_parse_mode': 'html',
+    'caption_index_enabled': True,
+    'caption_index_padding': 2,   # 01, 02, 03
+    'caption_index_start': 1,
+
+    # Filename styling
     'prefix': '',
     'suffix': '',
+    'replace_words': '',
+
+    # Auto rename basic
     'auto_rename': '',
+    'auto_rename_enabled': False,
+
+    # Auto rename advanced
+    'rename_template': '',
+    'rename_parse_mode': 'text',
+    'filename_prefix': '',
+    'filename_suffix': '',
+    'filename_index_enabled': False,
+    'filename_index_padding': 2,
+    'filename_index_start': 1,
+
+    # Metadata
     'metadata_enabled': False,
     'metadata_video_title': '',
     'metadata_video_author': '',
     'metadata_audio_title': '',
     'metadata_subtitle_title': '',
+
+    # Upload
     'upload_destination': '',
     'topic_id': '',
-    'replace_words': '',
+
+    # Index/session
     'index_mode': False,
-    # V6 login/session helpers
     'authorized_mode': False,
     'last_login_user_id': 0,
 }
@@ -49,7 +76,16 @@ WAITING_KEYS = {
     'set_metadata_subtitle_title': 'metadata_subtitle_title',
     'set_thumbnail_photo': 'thumbnail_file_id',
 
-    # V6 login flow states
+    # V7 new
+    'set_rename_template': 'rename_template',
+    'set_filename_prefix': 'filename_prefix',
+    'set_filename_suffix': 'filename_suffix',
+    'set_caption_index_padding': 'caption_index_padding',
+    'set_caption_index_start': 'caption_index_start',
+    'set_filename_index_padding': 'filename_index_padding',
+    'set_filename_index_start': 'filename_index_start',
+
+    # Login flow states
     'login_phone': 'login_phone',
     'login_code': 'login_code',
     'login_password': 'login_password',
@@ -74,6 +110,42 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_settings(data: dict):
+    merged = DEFAULT_SETTINGS.copy()
+    if isinstance(data, dict):
+        merged.update(data)
+
+    # sanitize integer fields
+    merged['caption_index_padding'] = max(1, _to_int(merged.get('caption_index_padding', 2), 2))
+    merged['caption_index_start'] = max(0, _to_int(merged.get('caption_index_start', 1), 1))
+    merged['filename_index_padding'] = max(1, _to_int(merged.get('filename_index_padding', 2), 2))
+    merged['filename_index_start'] = max(0, _to_int(merged.get('filename_index_start', 1), 1))
+    merged['last_login_user_id'] = _to_int(merged.get('last_login_user_id', 0), 0)
+
+    # sanitize booleans
+    bool_keys = [
+        'thumbnail_enabled',
+        'caption_enabled',
+        'caption_index_enabled',
+        'auto_rename_enabled',
+        'filename_index_enabled',
+        'metadata_enabled',
+        'index_mode',
+        'authorized_mode',
+    ]
+    for key in bool_keys:
+        merged[key] = bool(merged.get(key, False))
+
+    return merged
+
+
 # ================= SETTINGS =================
 
 def get_all_settings():
@@ -89,9 +161,7 @@ def get_user_settings(user_id: int):
     uid = str(user_id)
     current = all_settings.get(uid, {})
 
-    merged = DEFAULT_SETTINGS.copy()
-    if isinstance(current, dict):
-        merged.update(current)
+    merged = _normalize_settings(current)
 
     if uid not in all_settings or merged != current:
         all_settings[uid] = merged
@@ -112,6 +182,7 @@ def update_user_settings(user_id: int, new_data: dict):
     if isinstance(new_data, dict):
         current.update(new_data)
 
+    current = _normalize_settings(current)
     all_settings[uid] = current
     save_all_settings(all_settings)
 
@@ -132,14 +203,23 @@ def save_all_states(data):
     save_json(STATE_FILE, data)
 
 
+def get_user_state(user_id: int):
+    raw = get_all_states().get(str(user_id), '')
+    if isinstance(raw, dict):
+        return raw.get('state', '')
+    return raw
+
+
 def set_user_state(user_id: int, state: str):
     states = get_all_states()
-    states[str(user_id)] = state
+    uid = str(user_id)
+    current = states.get(uid, {})
+    if isinstance(current, dict):
+        current['state'] = state
+        states[uid] = current
+    else:
+        states[uid] = {'state': state}
     save_all_states(states)
-
-
-def get_user_state(user_id: int):
-    return get_all_states().get(str(user_id), '')
 
 
 def clear_user_state(user_id: int):
@@ -216,7 +296,8 @@ def banned_count() -> int:
 # ================= INDEX ENTRIES =================
 
 def get_all_index_entries():
-    return load_json(INDEX_FILE, [])
+    data = load_json(INDEX_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def save_all_index_entries(data):
@@ -239,10 +320,40 @@ def index_count() -> int:
     return len(get_all_index_entries())
 
 
+def get_last_index_no(user_id: int = None) -> int:
+    entries = get_all_index_entries()
+    if not entries:
+        return 0
+
+    if user_id is None:
+        return int(entries[-1].get('index_no', 0) or 0)
+
+    user_entries = [x for x in entries if str(x.get('user_id')) == str(user_id)]
+    if not user_entries:
+        return 0
+
+    return int(user_entries[-1].get('index_no', 0) or 0)
+
+
+def format_index_number(index_no: int, padding: int = 2) -> str:
+    try:
+        index_no = int(index_no)
+    except Exception:
+        index_no = 0
+
+    try:
+        padding = max(1, int(padding))
+    except Exception:
+        padding = 2
+
+    return str(index_no).zfill(padding)
+
+
 # ================= INDEX MODE / INDEX STATE =================
 
 def get_index_state():
-    return load_json(INDEX_STATE_FILE, {})
+    data = load_json(INDEX_STATE_FILE, {})
+    return data if isinstance(data, dict) else {}
 
 
 def save_index_state(data):
@@ -280,7 +391,7 @@ def get_index_user_count(user_id: int) -> int:
     return int(get_index_state().get(str(user_id), {}).get('count', 0))
 
 
-# ================= SESSION STORE (V6) =================
+# ================= SESSION STORE =================
 
 def get_all_user_sessions():
     data = load_json(SESSION_STORE_FILE, {})
@@ -330,7 +441,7 @@ def delete_user_session(user_id: int):
     })
 
 
-# ================= LOGIN FLOW TEMP DATA (V6) =================
+# ================= LOGIN FLOW TEMP DATA =================
 
 def set_login_temp(user_id: int, key: str, value):
     states = get_all_states()
@@ -351,32 +462,7 @@ def get_login_temp(user_id: int, key: str, default=None):
     return default
 
 
-def get_user_state(user_id: int):
-    raw = get_all_states().get(str(user_id), '')
-    if isinstance(raw, dict):
-        return raw.get('state', '')
-    return raw
-
-
-def set_user_state(user_id: int, state: str):
-    states = get_all_states()
-    uid = str(user_id)
-    current = states.get(uid, {})
-    if isinstance(current, dict):
-        current['state'] = state
-        states[uid] = current
-    else:
-        states[uid] = {'state': state}
-    save_all_states(states)
-
-
-def clear_user_state(user_id: int):
-    states = get_all_states()
-    states.pop(str(user_id), None)
-    save_all_states(states)
-
-
-# ================= TASK STORE (V6) =================
+# ================= TASK STORE =================
 
 def get_all_tasks():
     data = load_json(TASKS_FILE, {})
@@ -395,11 +481,7 @@ def set_task(task_id: str, data: dict):
     else:
         current = data or {}
 
-    if 'updated_at' not in current:
-        current['updated_at'] = datetime.utcnow().isoformat()
-    else:
-        current['updated_at'] = datetime.utcnow().isoformat()
-
+    current['updated_at'] = datetime.utcnow().isoformat()
     tasks[task_id] = current
     save_all_tasks(tasks)
 
