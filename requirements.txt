@@ -1,3 +1,5 @@
 pyrofork
 python-dotenv
 aiofiles
+flask
+TgCrypto

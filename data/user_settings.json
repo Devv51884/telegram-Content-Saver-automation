@@ -30,7 +30,9 @@
     "topic_id": "",
     "index_mode": true,
     "authorized_mode": false,
-    "last_login_user_id": 0
+    "last_login_user_id": 0,
+    "batch_mode": false,
+    "batch_last_input": ""
   },
   "6949344152": {
     "upload_mode": "Telegram",

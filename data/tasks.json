@@ -40,5 +40,47 @@
     "status_chat_id": 6747712268,
     "status_message_id": 293,
     "last_ui_update": 1774198367.770317
+  },
+  "6277daff171c": {
+    "task_id": "6277daff171c",
+    "user_id": 6747712268,
+    "source": "https://t.me/c/2102477197/340",
+    "destination": "-1003496689015",
+    "status": "completed",
+    "progress_text": "Index 18 | Count 18",
+    "error": "",
+    "created_at": "2026-03-23T00:24:01",
+    "updated_at": "2026-03-22T18:54:36.185620",
+    "status_chat_id": 6747712268,
+    "status_message_id": 315,
+    "last_ui_update": 1774205674.574593
+  },
+  "73b0a2a26344": {
+    "task_id": "73b0a2a26344",
+    "user_id": 6747712268,
+    "source": "https://t.me/c/2102477197/340-342",
+    "destination": "-1003496689015",
+    "status": "completed",
+    "progress_text": "Index 19 | Count 19",
+    "error": "",
+    "created_at": "2026-03-23T00:28:07",
+    "updated_at": "2026-03-22T18:58:39.595686",
+    "status_chat_id": 6747712268,
+    "status_message_id": 318,
+    "last_ui_update": 1774205915.6228569
+  },
+  "8972d95847ca": {
+    "task_id": "8972d95847ca",
+    "user_id": 6747712268,
+    "source": "https://t.me/c/2102477197/340",
+    "destination": "-1003496689015",
+    "status": "completed",
+    "progress_text": "Index 20 | Count 20",
+    "error": "",
+    "created_at": "2026-03-23T15:52:54",
+    "updated_at": "2026-03-23T10:25:04.977113",
+    "status_chat_id": 6747712268,
+    "status_message_id": 327,
+    "last_ui_update": 1774261497.8589716
   }
 }

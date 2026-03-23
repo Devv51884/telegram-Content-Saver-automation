@@ -231,5 +231,50 @@
     "link_type": "private",
     "index_no": 17,
     "indexed_at": "2026-03-22T16:52:17.840682"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002102477197,
+    "message_id": 340,
+    "content_type": "document",
+    "text": "",
+    "caption": "",
+    "file_id": "BQACAgUAAx0CfVFBjQACAVRpwDrK2Oh2EQ4_J7s-hRnng9VfEgACtwwAAidPaFazSQJWLVxorB4E",
+    "file_name": "Doubts with Lakshay Bhaiya [Week 6].pdf",
+    "file_size": 8845948,
+    "source_link": "https://t.me/c/2102477197/340",
+    "link_type": "private",
+    "index_no": 18,
+    "indexed_at": "2026-03-22T18:54:03.120363"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002102477197,
+    "message_id": 340,
+    "content_type": "document",
+    "text": "",
+    "caption": "",
+    "file_id": "BQACAgUAAx0CfVFBjQACAVRpwDvAaOxZIZWlwOqDTang2HZItgACtwwAAidPaFazSQJWLVxorB4E",
+    "file_name": "Doubts with Lakshay Bhaiya [Week 6].pdf",
+    "file_size": 8845948,
+    "source_link": "https://t.me/c/2102477197/340-342",
+    "link_type": "private",
+    "index_no": 19,
+    "indexed_at": "2026-03-22T18:58:09.172465"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002102477197,
+    "message_id": 340,
+    "content_type": "document",
+    "text": "",
+    "caption": "",
+    "file_id": "BQACAgUAAx0CfVFBjQACAVRpwRR-sQiw7U4PSEKREHkzwHj4wAACtwwAAidPaFazSQJWLVxorB4E",
+    "file_name": "Doubts with Lakshay Bhaiya [Week 6].pdf",
+    "file_size": 8845948,
+    "source_link": "https://t.me/c/2102477197/340",
+    "link_type": "private",
+    "index_no": 20,
+    "indexed_at": "2026-03-23T10:22:55.589866"
   }
 ]

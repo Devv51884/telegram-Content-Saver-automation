@@ -5,12 +5,18 @@ from storage import (
     index_count,
     is_index_mode,
     has_user_session,
+    is_batch_mode,
 )
+
+
+def _safe_text(value, fallback="None"):
+    value = str(value or "").strip()
+    return value if value else fallback
 
 
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V7**\n\n"
+        f"👋 Welcome to **{APP_NAME} V8**\n\n"
         "Ye Code Devil ka working structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
@@ -24,8 +30,8 @@ def start_text():
         "/logout - Saved login remove karo\n"
         "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V7:**\n"
-        "Dynamic login/logout UI + advanced caption formatting + {index} support + better auto rename options."
+        "**New in V8:**\n"
+        "Batch processing + strict force subscribe + /start par user index reset + dynamic ✅❌ settings UI + batch range link support."
     )
 
 
@@ -55,7 +61,19 @@ def help_text():
         "**Caption Variables**\n"
         "{filename}, {size}, {duration}, {quality}, {language}, {subtitle}, {index}\n\n"
         "**Rename Variables**\n"
-        "{filename}, {index}"
+        "{filename}, {index}\n\n"
+        "**Batch Use**\n"
+        "Batch ON karke multiple Telegram links ek saath bhej sakte ho.\n\n"
+        "**Supported Batch Formats**\n"
+        "1. Single link:\n"
+        "   https://t.me/channel/25\n\n"
+        "2. Multiple lines:\n"
+        "   https://t.me/channel/25\n"
+        "   https://t.me/channel/26\n\n"
+        "3. Range format:\n"
+        "   https://t.me/Codebasics_courses_free/39-69\n"
+        "   https://t.me/c/2102477197/340-360\n\n"
+        "4. Space separated links bhi bhej sakte ho."
     )
 
 
@@ -69,7 +87,7 @@ def plan_text():
         "✅ V5 - Auto index + destination upload + log channel\n"
         "✅ V6 - Login/session system + realtime task processing\n"
         "✅ V7 - Dynamic login/logout UI + advanced caption + advanced auto rename\n"
-        "🔜 V8 - Better batch system\n"
+        "✅ V8 - Batch mode + strict force subscribe + /start index reset + range format batch links\n"
         "🔜 V9 - Premium + advanced tools"
     )
 
@@ -78,9 +96,9 @@ def terms_text():
     return (
         "📜 **Terms / Rules**\n\n"
         "1. Bot responsibly use karo.\n"
-        "2. Required channel join compulsory ho sakta hai.\n"
-        "3. Spam ya abuse mat karo.\n"
-        "4. Future versions me usage limits add ho sakti hain.\n"
+        "2. Required channel join compulsory hai agar force subscribe enabled hai.\n"
+        "3. Join ke bina bot ka koi feature use nahi hoga.\n"
+        "4. Spam ya abuse mat karo.\n"
         "5. Authorized access sirf wahi chalega jahan account ka valid access ho.\n"
         "6. Code Devil community updates ke liye channels join rakho."
     )
@@ -89,23 +107,25 @@ def terms_text():
 def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
     login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
+    batch_status = "Enabled ✅" if is_batch_mode(user_id) else "Disabled ❌"
 
     return (
         f"⚙️ **Settings for User**\n\n"
-        f"Upload Mode: **{s.get('upload_mode', 'Telegram')}**\n"
+        f"Upload Mode: **{_safe_text(s.get('upload_mode'), 'Telegram')}**\n"
         f"Custom Thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
         f"Caption: **{'Enabled' if s.get('caption_enabled') else 'Disabled'}**\n"
-        f"Prefix: **{s.get('prefix') or 'None'}**\n"
-        f"Suffix: **{s.get('suffix') or 'None'}**\n"
-        f"Auto Rename: **{s.get('auto_rename') or 'None'}**\n"
-        f"Rename Template: **{s.get('rename_template') or 'None'}**\n"
-        f"Filename Prefix: **{s.get('filename_prefix') or 'None'}**\n"
-        f"Filename Suffix: **{s.get('filename_suffix') or 'None'}**\n"
+        f"Prefix: **{_safe_text(s.get('prefix'))}**\n"
+        f"Suffix: **{_safe_text(s.get('suffix'))}**\n"
+        f"Auto Rename: **{_safe_text(s.get('auto_rename'))}**\n"
+        f"Rename Template: **{_safe_text(s.get('rename_template'))}**\n"
+        f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**\n"
+        f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**\n"
         f"Metadata: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n"
-        f"Upload Destination: **{s.get('upload_destination') or 'None'}**\n"
-        f"Topic ID: **{s.get('topic_id') or 'None'}**\n"
-        f"Replace Words: **{s.get('replace_words') or 'None'}**\n"
+        f"Upload Destination: **{_safe_text(s.get('upload_destination'))}**\n"
+        f"Topic ID: **{_safe_text(s.get('topic_id'))}**\n"
+        f"Replace Words: **{_safe_text(s.get('replace_words'))}**\n"
         f"Index Mode: **{'Enabled' if is_index_mode(user_id) else 'Disabled'}**\n"
+        f"Batch Mode: **{batch_status}**\n"
         f"Authorized Login: **{login_status}**\n\n"
         "Niche buttons se sab setting manage kar sakte ho."
     )
@@ -125,15 +145,16 @@ def thumbnail_text(user_id: int):
         "🖼 **Thumbnail Setting**\n\n"
         f"Current thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
         f"Thumbnail status: **{'Enabled' if s.get('thumbnail_enabled') else 'Disabled'}**\n\n"
-        "Send a photo to save it as custom thumbnail.\nTimeout: 60 sec"
+        "Send a photo to save it as custom thumbnail.\n"
+        "Timeout: 60 sec"
     )
 
 
 def caption_text(user_id: int):
     s = get_user_settings(user_id)
-    current = s.get('caption_text') or 'None'
-    padding = s.get('caption_index_padding', 2)
-    start = s.get('caption_index_start', 1)
+    current = s.get("caption_text") or "None"
+    padding = s.get("caption_index_padding", 2)
+    start = s.get("caption_index_start", 1)
 
     return (
         "📝 **Caption Setting**\n\n"
@@ -172,7 +193,7 @@ def prefix_text(user_id: int):
         "Prefix = @Code_Devil\n\n"
         "Output:\n"
         "@Code_Devil Fast_And_Furious.mkv\n\n"
-        f"Current prefix: **{s.get('prefix') or 'None'}**\n\n"
+        f"Current prefix: **{_safe_text(s.get('prefix'))}**\n\n"
         "Send Prefix. Timeout: 60 sec"
     )
 
@@ -186,7 +207,7 @@ def suffix_text(user_id: int):
         "Suffix = @Code_Devil\n\n"
         "Output:\n"
         "Fast_And_Furious @Code_Devil.mkv\n\n"
-        f"Current suffix: **{s.get('suffix') or 'None'}**\n\n"
+        f"Current suffix: **{_safe_text(s.get('suffix'))}**\n\n"
         "Send Suffix. Timeout: 60 sec"
     )
 
@@ -202,13 +223,13 @@ def auto_rename_text(user_id: int):
         "{filename} - Original filename\n"
         "{index} - Auto index number\n\n"
         "**Advanced Fields:**\n"
-        f"Rename Template: **{s.get('rename_template') or 'None'}**\n"
-        f"Filename Prefix: **{s.get('filename_prefix') or 'None'}**\n"
-        f"Filename Suffix: **{s.get('filename_suffix') or 'None'}**\n"
+        f"Rename Template: **{_safe_text(s.get('rename_template'))}**\n"
+        f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**\n"
+        f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**\n"
         f"Filename Index Enabled: **{'Yes' if s.get('filename_index_enabled') else 'No'}**\n"
         f"Filename Index Padding: **{s.get('filename_index_padding', 2)}**\n"
         f"Filename Index Start: **{s.get('filename_index_start', 1)}**\n\n"
-        f"Current auto rename: **{s.get('auto_rename') or 'None'}**\n\n"
+        f"Current auto rename: **{_safe_text(s.get('auto_rename'))}**\n\n"
         "Example rename template:\n"
         "`Movie_{index}`\n"
         "`{index}_{filename}`\n\n"
@@ -222,8 +243,9 @@ def destination_text(user_id: int):
         "📍 **Upload Destination Setting**\n\n"
         "Yahan chat id ya channel/group id set kar sakte ho.\n\n"
         "Example:\n"
-        "`-1001234567890`\n\n"
-        f"Current destination: **{s.get('upload_destination') or 'None'}**\n\n"
+        "`-1001234567890`\n"
+        "`@yourchannelusername`\n\n"
+        f"Current destination: **{_safe_text(s.get('upload_destination'))}**\n\n"
         "Send upload destination. Timeout: 60 sec"
     )
 
@@ -233,7 +255,7 @@ def topic_id_text(user_id: int):
     return (
         "🧵 **Topic ID Setting**\n\n"
         "Agar supergroup topics use kar rahe ho to topic id yahan set kar sakte ho.\n\n"
-        f"Current topic id: **{s.get('topic_id') or 'None'}**\n\n"
+        f"Current topic id: **{_safe_text(s.get('topic_id'))}**\n\n"
         "Send Topic ID. Timeout: 60 sec"
     )
 
@@ -246,7 +268,7 @@ def replace_words_text(user_id: int):
         "old1:new1, old2:new2\n\n"
         "Sirf remove karna ho to:\n"
         "old1:, old2:\n\n"
-        f"Current replace words: **{s.get('replace_words') or 'None'}**\n\n"
+        f"Current replace words: **{_safe_text(s.get('replace_words'))}**\n\n"
         "Ye filename aur caption dono cleaning me use ho sakta hai.\n"
         "Send remove/replace rules. Timeout: 60 sec"
     )
@@ -257,10 +279,10 @@ def metadata_home_text(user_id: int):
     return (
         "📦 **Metadata Setting**\n\n"
         f"Metadata status: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n\n"
-        f"Video Title: **{s.get('metadata_video_title') or 'None'}**\n"
-        f"Video Author: **{s.get('metadata_video_author') or 'None'}**\n"
-        f"Audio Title: **{s.get('metadata_audio_title') or 'None'}**\n"
-        f"Subtitle Title: **{s.get('metadata_subtitle_title') or 'None'}**\n"
+        f"Video Title: **{_safe_text(s.get('metadata_video_title'))}**\n"
+        f"Video Author: **{_safe_text(s.get('metadata_video_author'))}**\n"
+        f"Audio Title: **{_safe_text(s.get('metadata_audio_title'))}**\n"
+        f"Subtitle Title: **{_safe_text(s.get('metadata_subtitle_title'))}**\n"
     )
 
 
@@ -268,8 +290,32 @@ def metadata_field_text(user_id: int, label: str, key: str):
     s = get_user_settings(user_id)
     return (
         f"📦 **{label} Setting**\n\n"
-        f"Current value: **{s.get(key) or 'None'}**\n\n"
+        f"Current value: **{_safe_text(s.get(key))}**\n\n"
         f"Send {label}. Timeout: 60 sec"
+    )
+
+
+def batch_text(user_id: int):
+    s = get_user_settings(user_id)
+    current = s.get("batch_last_input") or "None"
+    return (
+        "📦 **Batch Mode Setting**\n\n"
+        f"Batch mode: **{'Enabled' if is_batch_mode(user_id) else 'Disabled'}**\n\n"
+        "Batch ON hone par multiple Telegram links ek saath process kar sakte ho.\n\n"
+        "**Supported formats:**\n"
+        "1. Single link:\n"
+        "`https://t.me/channel/25`\n\n"
+        "2. Multiple links:\n"
+        "`https://t.me/channel/25`\n"
+        "`https://t.me/channel/26`\n\n"
+        "3. Range link:\n"
+        "`https://t.me/Codebasics_courses_free/39-69`\n"
+        "`https://t.me/c/2102477197/340-360`\n\n"
+        "4. Space separated:\n"
+        "`https://t.me/channel/25 https://t.me/channel/26`\n\n"
+        "Range ka matlab start se end tak sab posts process hongi.\n\n"
+        f"Last batch input:\n`{current}`\n\n"
+        "Set Batch Links button se multiple links ya range save karo."
     )
 
 
@@ -323,14 +369,12 @@ def index_info_text(user_id: int):
         "• Bot auto process karega\n"
         "• Destination par upload karega\n"
         "• Log channel me save karega\n"
-        "• {index} caption aur rename me use ho sakta hai\n\n"
+        "• {index} caption aur rename me use ho sakta hai\n"
+        "• /start bhejne par tumhara current user index reset ho jayega\n"
+        "• Batch mode me range links bhi use ho sakte hain\n\n"
         "OFF karne ke liye /stop_index"
     )
 
-
-# =========================
-# LOGIN TEXTS
-# =========================
 
 def login_intro_text():
     return (
@@ -372,7 +416,7 @@ def ask_password_text():
     )
 
 
-def login_success_text(phone: str = ''):
+def login_success_text(phone: str = ""):
     phone_info = f"\n📱 Phone: `{phone}`" if phone else ""
     return (
         "✅ **Login Successful**\n\n"
@@ -420,15 +464,11 @@ def logout_missing_text():
     )
 
 
-# =========================
-# TASK TEXTS
-# =========================
-
 def task_running_text(task: dict):
-    status = task.get('status', 'unknown')
-    source = task.get('source', 'unknown')
-    progress = task.get('progress_text', '')
-    destination = task.get('destination', 'Not Set')
+    status = task.get("status", "unknown")
+    source = task.get("source", "unknown")
+    progress = task.get("progress_text", "")
+    destination = task.get("destination", "Not Set")
 
     text = (
         f"⚡ **Task Running**\n\n"
@@ -444,11 +484,15 @@ def task_running_text(task: dict):
 
 
 def task_completed_text(task: dict):
-    return (
+    progress = task.get("progress_text", "")
+    text = (
         "✅ **Task Completed**\n\n"
         f"**Source:** `{task.get('source', 'unknown')}`\n"
         f"**Destination:** `{task.get('destination', 'Not Set')}`"
     )
+    if progress:
+        text += f"\n**Result:** {progress}"
+    return text
 
 
 def task_failed_text(task: dict):
