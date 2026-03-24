@@ -32,6 +32,10 @@ def _upload_mode_button_label(mode: str) -> str:
     return "🎞 Send As Media"
 
 
+def _premium_label(is_premium: bool) -> str:
+    return "💎 Premium" if is_premium else "🆓 Free"
+
+
 def join_required_buttons():
     join_url = _safe_url(JOIN_LINK or MAIN_CHANNEL, "https://t.me/")
     return InlineKeyboardMarkup([
@@ -40,14 +44,14 @@ def join_required_buttons():
     ])
 
 
-def start_buttons(has_session: bool = False):
+def start_buttons(has_session: bool = False, is_admin: bool = False, is_premium: bool = False):
     auth_button = (
         InlineKeyboardButton("🚪 Logout", callback_data="do_logout")
         if has_session
         else InlineKeyboardButton("🔐 Login", callback_data="show_login_info")
     )
 
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton("📢 Main Channel", url=_safe_url(MAIN_CHANNEL)),
             InlineKeyboardButton("🛠 Updates", url=_safe_url(UPDATES_CHANNEL)),
@@ -60,13 +64,30 @@ def start_buttons(has_session: bool = False):
             InlineKeyboardButton("💬 WhatsApp", url=_safe_url(WHATSAPP_CHANNEL)),
         ],
         [
+            InlineKeyboardButton(_premium_label(is_premium), callback_data="show_premium_info"),
+        ],
+        [
             auth_button,
             InlineKeyboardButton("⚙️ Settings", callback_data="show_settings_home"),
         ],
-    ])
+    ]
+
+    if is_admin:
+        rows.insert(
+            -1,
+            [InlineKeyboardButton("🛡 Admin Panel", callback_data="show_admin_panel")]
+        )
+
+    return InlineKeyboardMarkup(rows)
 
 
-def settings_home_buttons(marks: dict, has_session: bool = False, upload_mode: str = "media"):
+def settings_home_buttons(
+    marks: dict,
+    has_session: bool = False,
+    upload_mode: str = "media",
+    is_admin: bool = False,
+    is_premium: bool = False,
+):
     auth_button = (
         InlineKeyboardButton(
             f"{marks.get('login', '❌')} Logout",
@@ -81,7 +102,13 @@ def settings_home_buttons(marks: dict, has_session: bool = False, upload_mode: s
 
     upload_mode_label = _upload_mode_button_label(upload_mode)
 
-    return InlineKeyboardMarkup([
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"{marks.get('premium', '🆓')} {_premium_label(is_premium)}",
+                callback_data="show_premium_info"
+            )
+        ],
         [
             InlineKeyboardButton(
                 f"{marks.get('upload_mode', '🎞')} {upload_mode_label}",
@@ -144,6 +171,15 @@ def settings_home_buttons(marks: dict, has_session: bool = False, upload_mode: s
                 callback_data="show_batch_settings"
             ),
         ],
+    ]
+
+    if is_admin:
+        rows.append([
+            InlineKeyboardButton("🛡 Admin Panel", callback_data="show_admin_panel"),
+            InlineKeyboardButton("👥 Users", callback_data="show_admin_users"),
+        ])
+
+    rows.extend([
         [
             auth_button,
             InlineKeyboardButton("📊 Login Status", callback_data="show_login_status"),
@@ -152,6 +188,39 @@ def settings_home_buttons(marks: dict, has_session: bool = False, upload_mode: s
             InlineKeyboardButton("♻️ Reset All", callback_data="reset_all_settings"),
         ],
     ])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_panel_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+            InlineKeyboardButton("👥 Users", callback_data="show_admin_users"),
+        ],
+        [
+            InlineKeyboardButton("💎 Premium", callback_data="admin_premium_help"),
+            InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast_help"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def premium_info_buttons(is_admin: bool = False):
+    rows = []
+
+    if is_admin:
+        rows.append([InlineKeyboardButton("💎 Premium Admin Help", callback_data="admin_premium_help")])
+
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+
+    return InlineKeyboardMarkup(rows)
 
 
 def submenu_nav(back: str = "show_settings_home"):
@@ -337,10 +406,13 @@ def my_tasks_buttons():
     ])
 
 
-def batch_buttons(enabled: bool):
+def batch_buttons(enabled: bool, is_premium: bool = False):
     label = "✅ Batch ON" if enabled else "❌ Batch OFF"
+    tier = "💎 Premium Batch" if is_premium else "🆓 Free Batch"
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_batch_mode")],
+        [InlineKeyboardButton(tier, callback_data="show_premium_info")],
         [InlineKeyboardButton("📥 Set Batch Links", callback_data="set_batch_links")],
         [InlineKeyboardButton("▶️ Start Batch", callback_data="start_batch_now")],
         [InlineKeyboardButton("🗑 Clear Batch", callback_data="clear_batch_links")],

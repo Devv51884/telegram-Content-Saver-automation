@@ -91,7 +91,7 @@ MAX_CONCURRENT_DOWNLOADS = max(1, _get_int("MAX_CONCURRENT_DOWNLOADS", 2))
 TASKS_FILE = _get_str("TASKS_FILE", "data/tasks.json")
 
 # =========================
-# BATCH SETTINGS (V8 🔥)
+# BATCH SETTINGS
 # =========================
 MAX_BATCH_LINKS = max(1, _get_int("MAX_BATCH_LINKS", 50))
 BATCH_DELAY = max(0.0, _get_float("BATCH_DELAY", 0.5))
@@ -107,6 +107,54 @@ MAX_FILE_SIZE_MB = max(1, _get_int("MAX_FILE_SIZE_MB", 2000))
 FORCE_SUB_STRICT = _get_bool("FORCE_SUB_STRICT", True)
 
 # =========================
+# V10 - PREMIUM / SUBSCRIPTION
+# =========================
+FREE_MAX_BATCH_LINKS = max(1, _get_int("FREE_MAX_BATCH_LINKS", 50))
+PREMIUM_MAX_BATCH_LINKS = max(FREE_MAX_BATCH_LINKS, _get_int("PREMIUM_MAX_BATCH_LINKS", 300))
+
+FREE_MAX_TASKS_PER_USER = max(1, _get_int("FREE_MAX_TASKS_PER_USER", 3))
+PREMIUM_MAX_TASKS_PER_USER = max(FREE_MAX_TASKS_PER_USER, _get_int("PREMIUM_MAX_TASKS_PER_USER", 10))
+
+DEFAULT_PREMIUM_PLAN_NAME = _get_str("DEFAULT_PREMIUM_PLAN_NAME", "Premium")
+PREMIUM_FILE = _get_str("PREMIUM_FILE", "data/premium_users.json")
+
+# =========================
+# V10 - SUPABASE
+# =========================
+SUPABASE_URL = _get_str("SUPABASE_URL", "")
+SUPABASE_KEY = _get_str("SUPABASE_KEY", "")
+SUPABASE_PREMIUM_TABLE = _get_str("SUPABASE_PREMIUM_TABLE", "premium_users")
+
+# =========================
+# V10 - DIRECT PUBLIC COPY / FAST SAVE
+# =========================
+ENABLE_DIRECT_PUBLIC_COPY = _get_bool("ENABLE_DIRECT_PUBLIC_COPY", True)
+ENABLE_LOG_CHANNEL_DIRECT_COPY = _get_bool("ENABLE_LOG_CHANNEL_DIRECT_COPY", True)
+
+# =========================
+# V10 - RETRY / RESILIENCE
+# =========================
+AUTO_RETRY_FAILED_TASKS = _get_bool("AUTO_RETRY_FAILED_TASKS", True)
+MAX_RETRY_ATTEMPTS = max(0, _get_int("MAX_RETRY_ATTEMPTS", 2))
+RETRY_DELAY_SECONDS = max(0.0, _get_float("RETRY_DELAY_SECONDS", 2.0))
+
+# =========================
+# V10 - PROGRESS UI
+# =========================
+SHOW_REALTIME_SPEED = _get_bool("SHOW_REALTIME_SPEED", True)
+SHOW_REALTIME_ETA = _get_bool("SHOW_REALTIME_ETA", True)
+SHOW_PROGRESS_BAR = _get_bool("SHOW_PROGRESS_BAR", True)
+PROGRESS_BAR_LENGTH = max(5, _get_int("PROGRESS_BAR_LENGTH", 10))
+PROGRESS_UPDATE_INTERVAL = max(0.5, _get_float("PROGRESS_UPDATE_INTERVAL", 2.0))
+
+# =========================
+# WEB / HEALTH
+# =========================
+WEB_HOST = _get_str("WEB_HOST", "0.0.0.0")
+WEB_PORT = _get_int("WEB_PORT", 8080)
+HEALTH_TOKEN = _get_str("HEALTH_TOKEN", "")
+
+# =========================
 # BASE DATA
 # =========================
 DATA_DIR = _get_str("DATA_DIR", "data")
@@ -118,13 +166,10 @@ BANNED_FILE = os.path.join(DATA_DIR, "banned_users.json")
 INDEX_FILE = os.path.join(DATA_DIR, "index_store.json")
 INDEX_STATE_FILE = os.path.join(DATA_DIR, "index_state.json")
 
-SESSION_NAME = _get_str("SESSION_NAME", "code_devil_v8_structured")
+SESSION_NAME = _get_str("SESSION_NAME", "code_devil_v10_structured")
 
 # =========================
 # CREATE REQUIRED FOLDERS
 # =========================
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
-WEB_HOST = _get_str("WEB_HOST", "0.0.0.0")
-WEB_PORT = _get_int("WEB_PORT", 8080)
-HEALTH_TOKEN = _get_str("HEALTH_TOKEN", "")

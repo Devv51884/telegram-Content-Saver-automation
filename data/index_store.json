@@ -336,5 +336,50 @@
     "link_type": "public",
     "index_no": 24,
     "indexed_at": "2026-03-23T13:02:14.336036"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002825771315,
+    "message_id": 39,
+    "content_type": "text",
+    "text": "2(d).Python Basics Lists, If Condition and For Loop",
+    "caption": "",
+    "file_id": "",
+    "file_name": "",
+    "file_size": 0,
+    "source_link": "https://t.me/Codebasics_courses_free/39",
+    "link_type": "public",
+    "index_no": 25,
+    "indexed_at": "2026-03-24T07:51:16.368164"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002825771315,
+    "message_id": 40,
+    "content_type": "video",
+    "text": "",
+    "caption": "E2.Peter found something interesting@hmaracollege.mp4",
+    "file_id": "BAACAgQAAyEFAASobdkzAAMoacJCdvBBziHKVf7pwiK39lK5uqAAAvAcAAIU1KlQqVrLO-YIO84eBA",
+    "file_name": "E2.Peter found something interesting@hmaracollege.mp4",
+    "file_size": 15393253,
+    "source_link": "https://t.me/Codebasics_courses_free/40",
+    "link_type": "public",
+    "index_no": 26,
+    "indexed_at": "2026-03-24T07:51:18.510593"
+  },
+  {
+    "user_id": 6747712268,
+    "chat_id": -1002825771315,
+    "message_id": 40,
+    "content_type": "video",
+    "text": "",
+    "caption": "E2.Peter found something interesting@hmaracollege.mp4",
+    "file_id": "BAACAgQAAyEFAASobdkzAAMoacJCxb4JB9qjWdFanqAzbVFrphEAAvAcAAIU1KlQqVrLO-YIO84eBA",
+    "file_name": "E2.Peter found something interesting@hmaracollege.mp4",
+    "file_size": 15393253,
+    "source_link": "https://t.me/Codebasics_courses_free/40",
+    "link_type": "public",
+    "index_no": 27,
+    "indexed_at": "2026-03-24T07:52:38.050402"
   }
 ]

@@ -28,6 +28,9 @@ from config import (
     MAX_BATCH_LINKS,
     BATCH_DELAY,
     DEFAULT_DESTINATION,
+    AUTO_RETRY_FAILED_TASKS,
+    MAX_RETRY_ATTEMPTS,
+    RETRY_DELAY_SECONDS,
 )
 
 from keyboards import (
@@ -48,6 +51,8 @@ from keyboards import (
     auto_rename_buttons,
     filename_index_buttons,
     batch_buttons,
+    admin_panel_buttons,
+    premium_info_buttons,
 )
 
 from texts import (
@@ -86,6 +91,9 @@ from texts import (
     task_completed_text,
     task_failed_text,
     my_tasks_text,
+    premium_info_text,
+    admin_panel_text,
+    admin_premium_help_text,
 )
 
 from storage import (
@@ -126,6 +134,13 @@ from storage import (
     save_batch_input,
     get_batch_input,
     parse_batch_links,
+    is_premium_user,
+    get_user_batch_limit,
+    get_user_task_limit,
+    add_premium,
+    remove_premium,
+    get_premium_expiry_text,
+    cleanup_expired_premium_users,
 )
 
 app = Client(
@@ -223,14 +238,8 @@ def build_template_context(source_msg, settings: dict, index_no: int = 0):
     filename_padding = int(settings.get("filename_index_padding", 2) or 2)
     filename_start = int(settings.get("filename_index_start", 1) or 1)
 
-    caption_index_value = format_index_number(
-        max(0, caption_start + max(0, index_no - 1)),
-        caption_padding
-    )
-    filename_index_value = format_index_number(
-        max(0, filename_start + max(0, index_no - 1)),
-        filename_padding
-    )
+    caption_index_value = format_index_number(max(0, caption_start + max(0, index_no - 1)), caption_padding)
+    filename_index_value = format_index_number(max(0, filename_start + max(0, index_no - 1)), filename_padding)
 
     size = ""
     if source_msg.document:
@@ -320,10 +329,7 @@ def build_final_filename(original_filename: str, settings: dict, index_no: int =
 
     filename_padding = int(settings.get("filename_index_padding", 2) or 2)
     filename_start = int(settings.get("filename_index_start", 1) or 1)
-    filename_index_value = format_index_number(
-        max(0, filename_start + max(0, index_no - 1)),
-        filename_padding
-    )
+    filename_index_value = format_index_number(max(0, filename_start + max(0, index_no - 1)), filename_padding)
 
     context = {
         "filename": base,
@@ -399,22 +405,38 @@ def human_eta(seconds: float) -> str:
     return f"{hours}h {minutes}m"
 
 
+def progress_bar(percent: float, length: int = 10) -> str:
+    try:
+        percent = max(0.0, min(100.0, float(percent)))
+    except Exception:
+        percent = 0.0
+    filled = int(round((percent / 100.0) * length))
+    return "█" * filled + "░" * (length - filled)
+
+
 def build_settings_home_markup(user_id: int):
     marks = get_settings_marks(user_id)
     has_session = has_user_session(user_id)
     upload_mode = get_user_settings(user_id).get("upload_mode", "media")
+    return settings_home_buttons(
+        marks,
+        has_session,
+        upload_mode,
+        is_admin(user_id),
+        is_premium_user(user_id),
+    )
 
-    try:
-        return settings_home_buttons(marks, has_session, upload_mode)
-    except TypeError:
-        return settings_home_buttons(marks, has_session)
+
+def build_start_markup(user_id: int):
+    return start_buttons(
+        has_user_session(user_id),
+        is_admin(user_id),
+        is_premium_user(user_id),
+    )
 
 
 def build_upload_mode_message(user_id: int):
-    try:
-        return upload_mode_text(user_id)
-    except TypeError:
-        return upload_mode_text()
+    return upload_mode_text(user_id)
 
 
 async def update_task_status_message(client, task_id: str, done: bool = False):
@@ -499,7 +521,7 @@ async def progress_callback(current, total, client, task_id: str, stage: str):
     remaining = max((total - current), 0) if total else 0
     eta = (remaining / speed) if speed > 0 and total else 0
 
-    progress_parts = [f"{percent:.2f}% ({human_bytes(current)}/{human_bytes(total)})"]
+    progress_parts = [f"{progress_bar(percent)} {percent:.2f}% ({human_bytes(current)}/{human_bytes(total)})"]
     if speed > 0:
         progress_parts.append(f"Speed: {human_speed(speed)}")
     if total and speed > 0:
@@ -649,6 +671,31 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
     return None, info, None
 
 
+def can_direct_copy(source_msg, settings: dict) -> bool:
+    # Safe fast path only when file name/caption modifications won't be needed
+    if settings.get("thumbnail_enabled"):
+        return False
+    if settings.get("caption_enabled") and settings.get("caption_text"):
+        return False
+    if settings.get("prefix") or settings.get("suffix") or settings.get("replace_words"):
+        return False
+    if settings.get("auto_rename_enabled") or settings.get("rename_template") or settings.get("auto_rename"):
+        return False
+    if settings.get("filename_prefix") or settings.get("filename_suffix") or settings.get("filename_index_enabled"):
+        return False
+    return True
+
+
+async def try_direct_copy(client, source_msg, target, settings: dict):
+    topic_id = safe_topic_id(settings.get("topic_id", ""))
+    return await client.copy_message(
+        chat_id=target,
+        from_chat_id=source_msg.chat.id,
+        message_id=source_msg.id,
+        message_thread_id=topic_id if topic_id else None,
+    )
+
+
 async def get_thumbnail_temp_path(client, settings: dict, task_id: str = ""):
     thumb_file_id = (settings.get("thumbnail_file_id") or "").strip()
     if not settings.get("thumbnail_enabled") or not thumb_file_id:
@@ -766,34 +813,9 @@ async def send_text_to_target(client, target, source_msg, settings: dict, index_
     )
 
 
-async def process_link_task(client, user_id: int, message, link_text: str):
-    if count_running_tasks(user_id) >= MAX_TASKS_PER_USER:
-        await message.reply_text(
-            f"⚠️ Ek time par max {MAX_TASKS_PER_USER} running tasks allowed hain."
-        )
-        return
-
-    task_id = make_task_id()
-    settings = get_user_settings(user_id)
-    destination = normalize_target(settings.get("upload_destination", "")) or DEFAULT_DESTINATION or None
-
-    set_task(task_id, {
-        "task_id": task_id,
-        "user_id": user_id,
-        "source": link_text.strip(),
-        "destination": str(destination or "Not Set"),
-        "status": "queued",
-        "progress_text": "",
-        "error": "",
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    })
-
-    await create_task_status_message(message, task_id)
-
+async def _perform_transfer(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
     user_client = None
     download_path = None
-
     try:
         set_task(task_id, {"status": "fetching", "progress_text": "Finding source message..."})
         await update_task_status_message(client, task_id)
@@ -803,12 +825,7 @@ async def process_link_task(client, user_id: int, message, link_text: str):
         source_msg, info, user_client = await fetch_message_via_best_client(client, user_id, link_text)
 
         if not source_msg:
-            set_task(task_id, {
-                "status": "failed",
-                "error": "Source message fetch nahi ho paya. Public access ya authorized login required."
-            })
-            await update_task_status_message(client, task_id, done=True)
-            return
+            raise RuntimeError("Source message fetch nahi ho paya. Public access ya authorized login required.")
 
         entry = {
             "user_id": user_id,
@@ -860,60 +877,42 @@ async def process_link_task(client, user_id: int, message, link_text: str):
             set_task(task_id, {"status": "uploading", "progress_text": "Sending text/message..."})
             await update_task_status_message(client, task_id)
 
-            ensure_task_not_cancelled(task_id)
-
             if destination:
                 await send_text_to_target(client, destination, source_msg, settings, index_no=user_index_no)
-
             if LOG_CHANNEL:
                 await send_text_to_target(client, LOG_CHANNEL, source_msg, settings, index_no=user_index_no)
+        else:
+            # Fast direct-copy path for public messages when no modifications are required
+            if entry["link_type"] == "public" and can_direct_copy(source_msg, settings):
+                set_task(task_id, {"status": "uploading", "progress_text": "Direct copy path..."})
+                await update_task_status_message(client, task_id)
+                if destination:
+                    await try_direct_copy(client, source_msg, destination, settings)
+                if LOG_CHANNEL:
+                    await try_direct_copy(client, source_msg, LOG_CHANNEL, settings)
+            else:
+                set_task(task_id, {"status": "downloading", "progress_text": "Starting download..."})
+                await update_task_status_message(client, task_id)
 
-            set_task(task_id, {
-                "status": "completed",
-                "progress_text": f"Index {idx_no} | Count {user_count_now}"
-            })
-            await update_task_status_message(client, task_id, done=True)
+                download_path = get_temp_download_path(source_msg)
+                source_client = user_client if user_client else client
 
-            await message.reply_text(
-                f"⚡ **Auto Link Process Done**\n\n"
-                f"📚 Global Index No: **{idx_no}**\n"
-                f"🔢 User Index No: **{user_index_no}**\n"
-                f"📦 Type: **{entry['content_type']}**\n"
-                f"📊 Your Total Indexed: **{user_count_now}**\n"
-                f"📍 Destination: **{destination or 'Not Set'}**\n"
-                f"🔗 Link Type: **{entry['link_type'] or 'unknown'}**"
-            )
-            return
+                await source_client.download_media(
+                    source_msg,
+                    file_name=download_path,
+                    progress=progress_callback,
+                    progress_args=(client, task_id, "downloading"),
+                )
 
-        set_task(task_id, {"status": "downloading", "progress_text": "Starting download..."})
-        await update_task_status_message(client, task_id)
+                download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
 
-        ensure_task_not_cancelled(task_id)
+                set_task(task_id, {"status": "uploading", "progress_text": "Preparing upload..."})
+                await update_task_status_message(client, task_id)
 
-        download_path = get_temp_download_path(source_msg)
-        source_client = user_client if user_client else client
-
-        await source_client.download_media(
-            source_msg,
-            file_name=download_path,
-            progress=progress_callback,
-            progress_args=(client, task_id, "downloading"),
-        )
-
-        ensure_task_not_cancelled(task_id)
-
-        download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
-
-        set_task(task_id, {"status": "uploading", "progress_text": "Preparing upload..."})
-        await update_task_status_message(client, task_id)
-
-        ensure_task_not_cancelled(task_id)
-
-        if destination:
-            await upload_file_to_target(client, task_id, destination, download_path, source_msg, settings, index_no=user_index_no)
-
-        if LOG_CHANNEL:
-            await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, settings, index_no=user_index_no)
+                if destination:
+                    await upload_file_to_target(client, task_id, destination, download_path, source_msg, settings, index_no=user_index_no)
+                if LOG_CHANNEL:
+                    await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, settings, index_no=user_index_no)
 
         set_task(task_id, {
             "status": "completed",
@@ -931,26 +930,69 @@ async def process_link_task(client, user_id: int, message, link_text: str):
             f"🔗 Link Type: **{entry['link_type'] or 'unknown'}**"
         )
 
-    except FloodWait as e:
-        set_task(task_id, {"status": "failed", "error": f"FloodWait: wait {e.value}s"})
-        await update_task_status_message(client, task_id, done=True)
-        await message.reply_text(f"❌ FloodWait: {e.value}s wait karo.")
-    except Exception as e:
-        set_task(task_id, {"status": "failed", "error": str(e)})
-        await update_task_status_message(client, task_id, done=True)
-        await message.reply_text(f"❌ Task failed:\n{e}")
     finally:
         if user_client:
             try:
                 await user_client.disconnect()
             except Exception:
                 pass
-
         if download_path and os.path.exists(download_path):
             try:
                 os.remove(download_path)
             except Exception:
                 pass
+
+
+async def process_link_task(client, user_id: int, message, link_text: str):
+    user_task_limit = get_user_task_limit(user_id)
+    if count_running_tasks(user_id) >= user_task_limit:
+        await message.reply_text(f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain.")
+        return
+
+    task_id = make_task_id()
+    settings = get_user_settings(user_id)
+    destination = normalize_target(settings.get("upload_destination", "")) or DEFAULT_DESTINATION or None
+
+    set_task(task_id, {
+        "task_id": task_id,
+        "user_id": user_id,
+        "source": link_text.strip(),
+        "destination": str(destination or "Not Set"),
+        "status": "queued",
+        "progress_text": "",
+        "error": "",
+        "retry_count": 0,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+
+    await create_task_status_message(message, task_id)
+
+    for attempt in range(MAX_RETRY_ATTEMPTS + 1):
+        try:
+            if attempt > 0:
+                set_task(task_id, {"retry_count": attempt, "status": "processing", "progress_text": f"Retry {attempt}/{MAX_RETRY_ATTEMPTS}..."})
+                await update_task_status_message(client, task_id)
+
+            await _perform_transfer(client, user_id, message, link_text, task_id, settings, destination)
+            return
+
+        except FloodWait as e:
+            set_task(task_id, {"status": "failed", "error": f"FloodWait: wait {e.value}s"})
+            await update_task_status_message(client, task_id, done=True)
+            await message.reply_text(f"❌ FloodWait: {e.value}s wait karo.")
+            return
+
+        except Exception as e:
+            should_retry = AUTO_RETRY_FAILED_TASKS and attempt < MAX_RETRY_ATTEMPTS
+            if should_retry:
+                await asyncio.sleep(RETRY_DELAY_SECONDS)
+                continue
+
+            set_task(task_id, {"status": "failed", "error": str(e)})
+            await update_task_status_message(client, task_id, done=True)
+            await message.reply_text(f"❌ Task failed:\n{e}")
+            return
 
 
 async def process_batch_links(client, user_id: int, message, raw_text: str):
@@ -961,21 +1003,17 @@ async def process_batch_links(client, user_id: int, message, raw_text: str):
 
     save_batch_input(user_id, raw_text)
 
-    if len(links) > MAX_BATCH_LINKS:
-        links = links[:MAX_BATCH_LINKS]
+    user_batch_limit = get_user_batch_limit(user_id)
+    if len(links) > user_batch_limit:
+        links = links[:user_batch_limit]
         await message.reply_text(
-            f"⚠️ Batch links limit exceed ho gayi thi.\nSirf first **{MAX_BATCH_LINKS}** links process honge."
+            f"⚠️ Batch links limit exceed ho gayi thi.\nSirf first **{user_batch_limit}** links process honge."
         )
 
-    await message.reply_text(
-        f"📦 Batch start ho raha hai.\n\nTotal links: **{len(links)}**"
-    )
+    await message.reply_text(f"📦 Batch start ho raha hai.\n\nTotal links: **{len(links)}**")
 
     for idx, link in enumerate(links, start=1):
-        await message.reply_text(
-            f"▶️ Batch item **{idx}/{len(links)}**\n"
-            f"[{link}]"
-        )
+        await message.reply_text(f"▶️ Batch item **{idx}/{len(links)}**\n[{link}]")
         await process_link_task(client, user_id, message, link)
         if BATCH_DELAY > 0:
             await asyncio.sleep(BATCH_DELAY)
@@ -1060,58 +1098,26 @@ async def finish_login_with_password(user_id: int, password: str):
 async def send_broadcast_to_user(client, uid: int, reply_msg, broadcast_text: str):
     if reply_msg:
         if reply_msg.photo:
-            return await client.send_photo(
-                uid,
-                photo=reply_msg.photo.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_photo(uid, photo=reply_msg.photo.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.video:
-            return await client.send_video(
-                uid,
-                video=reply_msg.video.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_video(uid, video=reply_msg.video.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.document:
-            return await client.send_document(
-                uid,
-                document=reply_msg.document.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_document(uid, document=reply_msg.document.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.audio:
-            return await client.send_audio(
-                uid,
-                audio=reply_msg.audio.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_audio(uid, audio=reply_msg.audio.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.voice:
-            return await client.send_voice(
-                uid,
-                voice=reply_msg.voice.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_voice(uid, voice=reply_msg.voice.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.animation:
-            return await client.send_animation(
-                uid,
-                animation=reply_msg.animation.file_id,
-                caption=broadcast_text or reply_msg.caption or ""
-            )
+            return await client.send_animation(uid, animation=reply_msg.animation.file_id, caption=broadcast_text or reply_msg.caption or "")
         elif reply_msg.text:
-            return await client.send_message(
-                uid,
-                broadcast_text or reply_msg.text,
-                disable_web_page_preview=True
-            )
+            return await client.send_message(uid, broadcast_text or reply_msg.text, disable_web_page_preview=True)
         else:
             raise RuntimeError("Unsupported broadcast reply message type.")
 
     if not broadcast_text:
         raise RuntimeError("Empty broadcast text.")
 
-    return await client.send_message(
-        uid,
-        f"📢 **Code Devil Broadcast**\n\n{broadcast_text}",
-        disable_web_page_preview=True
-    )
+    return await client.send_message(uid, f"📢 **Code Devil Broadcast**\n\n{broadcast_text}", disable_web_page_preview=True)
 
 
 async def handle_admin_commands(client, message, lowered: str):
@@ -1140,6 +1146,39 @@ async def handle_admin_commands(client, message, lowered: str):
             [f"• {u.get('first_name') or 'User'} | `{u.get('id')}` | @{u.get('username') or 'no_username'}" for u in recent]
         )
         await message.reply_text(text)
+        return True
+
+    if lowered.startswith("/premium_status"):
+        parts = (message.text or "").split(maxsplit=1)
+        target = user_id
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            target = int(parts[1].strip())
+        expiry = get_premium_expiry_text(target) or "No expiry"
+        status = "Premium 💎" if is_premium_user(target) else "Free 🆓"
+        await message.reply_text(f"User `{target}`\nStatus: **{status}**\nExpiry: `{expiry}`")
+        return True
+
+    if lowered.startswith("/add_premium"):
+        parts = (message.text or "").split()
+        if len(parts) < 3 or not parts[1].isdigit():
+            await message.reply_text("Use: /add_premium user_id 30d")
+            return True
+        target = int(parts[1])
+        duration = parts[2]
+        record = add_premium(target, duration, granted_by=user_id)
+        await message.reply_text(
+            f"✅ Premium added\nUser: `{target}`\nExpiry: `{record.get('premium_expires_at') or 'No expiry'}`"
+        )
+        return True
+
+    if lowered.startswith("/remove_premium"):
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.reply_text("Use: /remove_premium user_id")
+            return True
+        target = int(parts[1])
+        remove_premium(target)
+        await message.reply_text(f"✅ Premium removed for `{target}`")
         return True
 
     if lowered.startswith("/ban"):
@@ -1196,11 +1235,7 @@ async def handle_admin_commands(client, message, lowered: str):
             except Exception:
                 failed += 1
 
-        await status.edit_text(
-            "📢 **Broadcast Complete**\n\n"
-            f"✅ Sent: {sent}\n"
-            f"❌ Failed: {failed}"
-        )
+        await status.edit_text("📢 **Broadcast Complete**\n\n" f"✅ Sent: {sent}\n" f"❌ Failed: {failed}")
         return True
 
     if lowered.startswith("/index_id"):
@@ -1234,17 +1269,14 @@ async def all_callbacks(client, callback_query):
         await callback_query.answer("🚫 Aap bot use nahi kar sakte.", show_alert=True)
         return
 
+    cleanup_expired_premium_users()
+
     s = get_user_settings(user_id)
-    marks = get_settings_marks(user_id)
 
     if data.startswith("task_refresh:"):
         task_id = data.split(":", 1)[1]
         task = get_task(task_id) or {}
-        await update_task_status_message(
-            client,
-            task_id,
-            done=task.get("status") in {"completed", "failed", "cancelled"}
-        )
+        await update_task_status_message(client, task_id, done=task.get("status") in {"completed", "failed", "cancelled"})
         await callback_query.answer("♻️ Refreshed")
         return
 
@@ -1257,14 +1289,65 @@ async def all_callbacks(client, callback_query):
         await callback_query.answer("🛑 Cancelled")
         return
 
+    elif data == "show_premium_info":
+        try:
+            await callback_query.message.edit_text(
+                premium_info_text(user_id),
+                reply_markup=premium_info_buttons(is_admin(user_id)),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == "show_admin_panel":
+        if not is_admin(user_id):
+            await callback_query.answer("Only admin", show_alert=True)
+            return
+        try:
+            await callback_query.message.edit_text(
+                admin_panel_text(),
+                reply_markup=admin_panel_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == "admin_premium_help":
+        if not is_admin(user_id):
+            await callback_query.answer("Only admin", show_alert=True)
+            return
+        try:
+            await callback_query.message.edit_text(
+                admin_premium_help_text(),
+                reply_markup=admin_panel_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
+    elif data == "show_admin_users":
+        if not is_admin(user_id):
+            await callback_query.answer("Only admin", show_alert=True)
+            return
+        recent = get_recent_users(15)
+        text = "👥 **Recent Users**\n\n" + ("\n".join([f"• {u.get('first_name') or 'User'} | `{u.get('id')}` | @{u.get('username') or 'no_username'}" for u in recent]) if recent else "No users")
+        try:
+            await callback_query.message.edit_text(text, reply_markup=admin_panel_buttons(), disable_web_page_preview=True)
+        except Exception:
+            pass
+        await callback_query.answer()
+        return
+
     elif data == "show_my_tasks":
         tasks = get_user_tasks(user_id, limit=10)
         try:
-            await callback_query.message.edit_text(
-                my_tasks_text(tasks),
-                reply_markup=my_tasks_buttons(),
-                disable_web_page_preview=True,
-            )
+            await callback_query.message.edit_text(my_tasks_text(tasks), reply_markup=my_tasks_buttons(), disable_web_page_preview=True)
         except Exception:
             pass
         await callback_query.answer()
@@ -1272,11 +1355,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "show_login_info":
         try:
-            await callback_query.message.edit_text(
-                login_intro_text(),
-                reply_markup=login_buttons(has_user_session(user_id)),
-                disable_web_page_preview=True,
-            )
+            await callback_query.message.edit_text(login_intro_text(), reply_markup=login_buttons(has_user_session(user_id)), disable_web_page_preview=True)
         except Exception:
             pass
         await callback_query.answer()
@@ -1284,11 +1363,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "show_login_status":
         try:
-            await callback_query.message.edit_text(
-                login_status_text(user_id),
-                reply_markup=login_buttons(has_user_session(user_id)),
-                disable_web_page_preview=True,
-            )
+            await callback_query.message.edit_text(login_status_text(user_id), reply_markup=login_buttons(has_user_session(user_id)), disable_web_page_preview=True)
         except Exception:
             pass
         await callback_query.answer()
@@ -1297,11 +1372,7 @@ async def all_callbacks(client, callback_query):
     elif data == "start_login_flow":
         set_user_state(user_id, "login_phone")
         try:
-            await callback_query.message.edit_text(
-                ask_phone_text(),
-                reply_markup=login_buttons(has_user_session(user_id)),
-                disable_web_page_preview=True,
-            )
+            await callback_query.message.edit_text(ask_phone_text(), reply_markup=login_buttons(has_user_session(user_id)), disable_web_page_preview=True)
         except Exception:
             pass
         await callback_query.answer()
@@ -1312,20 +1383,12 @@ async def all_callbacks(client, callback_query):
             delete_user_session(user_id)
             await cleanup_login_client(user_id)
             try:
-                await callback_query.message.edit_text(
-                    logout_success_text(),
-                    reply_markup=login_buttons(False),
-                    disable_web_page_preview=True,
-                )
+                await callback_query.message.edit_text(logout_success_text(), reply_markup=login_buttons(False), disable_web_page_preview=True)
             except Exception:
                 pass
         else:
             try:
-                await callback_query.message.edit_text(
-                    logout_missing_text(),
-                    reply_markup=login_buttons(False),
-                    disable_web_page_preview=True,
-                )
+                await callback_query.message.edit_text(logout_missing_text(), reply_markup=login_buttons(False), disable_web_page_preview=True)
             except Exception:
                 pass
         await callback_query.answer()
@@ -1358,9 +1421,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_thumbnail_photo":
         set_user_state(user_id, "set_thumbnail_photo")
-        await callback_query.message.reply_text(
-            "🖼 Ab ek photo bhejo jise custom thumbnail save karna hai.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🖼 Ab ek photo bhejo jise custom thumbnail save karna hai.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1391,25 +1452,19 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_caption_index_padding":
         set_user_state(user_id, "set_caption_index_padding")
-        await callback_query.message.reply_text(
-            "🔢 Ab caption index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🔢 Ab caption index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_caption_index_start":
         set_user_state(user_id, "set_caption_index_start")
-        await callback_query.message.reply_text(
-            "🚀 Ab caption index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🚀 Ab caption index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_caption_text":
         set_user_state(user_id, "set_caption_text")
-        await callback_query.message.reply_text(
-            "📝 Ab custom caption bhejo.\n{index} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("📝 Ab custom caption bhejo.\n{index} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1460,33 +1515,25 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_auto_rename":
         set_user_state(user_id, "set_auto_rename")
-        await callback_query.message.reply_text(
-            "✍️ Ab simple auto rename value bhejo.\n{index} aur {filename} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("✍️ Ab simple auto rename value bhejo.\n{index} aur {filename} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_rename_template":
         set_user_state(user_id, "set_rename_template")
-        await callback_query.message.reply_text(
-            "🧩 Ab rename template bhejo.\nExample: Movie_{index}\nYa: {index}_{filename}\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🧩 Ab rename template bhejo.\nExample: Movie_{index}\nYa: {index}_{filename}\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_filename_prefix":
         set_user_state(user_id, "set_filename_prefix")
-        await callback_query.message.reply_text(
-            "🏷 Ab filename prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🏷 Ab filename prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_filename_suffix":
         set_user_state(user_id, "set_filename_suffix")
-        await callback_query.message.reply_text(
-            "🔖 Ab filename suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🔖 Ab filename suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1502,29 +1549,18 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_filename_index_padding":
         set_user_state(user_id, "set_filename_index_padding")
-        await callback_query.message.reply_text(
-            "🔢 Ab filename index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🔢 Ab filename index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "set_filename_index_start":
         set_user_state(user_id, "set_filename_index_start")
-        await callback_query.message.reply_text(
-            "🚀 Ab filename index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🚀 Ab filename index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "remove_auto_rename":
-        update_user_settings(user_id, {
-            "auto_rename": "",
-            "rename_template": "",
-            "filename_prefix": "",
-            "filename_suffix": "",
-            "auto_rename_enabled": False,
-            "filename_index_enabled": False,
-        })
+        update_user_settings(user_id, {"auto_rename": "", "rename_template": "", "filename_prefix": "", "filename_suffix": "", "auto_rename_enabled": False, "filename_index_enabled": False})
         text = auto_rename_text(user_id)
         kb = auto_rename_buttons(False)
 
@@ -1534,9 +1570,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_destination":
         set_user_state(user_id, "set_destination")
-        await callback_query.message.reply_text(
-            "📍 Ab upload destination bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("📍 Ab upload destination bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1551,9 +1585,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_topic_id":
         set_user_state(user_id, "set_topic_id")
-        await callback_query.message.reply_text(
-            "🧵 Ab topic id bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🧵 Ab topic id bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1568,9 +1600,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_replace_words":
         set_user_state(user_id, "set_replace_words")
-        await callback_query.message.reply_text(
-            "🔁 Ab remove/replace rules bhejo.\nExample: old:new, test:\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🔁 Ab remove/replace rules bhejo.\nExample: old:new, test:\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1595,9 +1625,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_metadata_video_title":
         set_user_state(user_id, "set_metadata_video_title")
-        await callback_query.message.reply_text(
-            "🎬 Ab Video Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🎬 Ab Video Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1612,9 +1640,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_metadata_video_author":
         set_user_state(user_id, "set_metadata_video_author")
-        await callback_query.message.reply_text(
-            "👤 Ab Video Author bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("👤 Ab Video Author bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1629,9 +1655,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_metadata_audio_title":
         set_user_state(user_id, "set_metadata_audio_title")
-        await callback_query.message.reply_text(
-            "🎵 Ab Audio Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("🎵 Ab Audio Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1646,9 +1670,7 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_metadata_subtitle_title":
         set_user_state(user_id, "set_metadata_subtitle_title")
-        await callback_query.message.reply_text(
-            "💬 Ab Subtitle Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("💬 Ab Subtitle Title bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -1677,25 +1699,23 @@ async def all_callbacks(client, callback_query):
 
     elif data == "show_batch_settings":
         text = batch_text(user_id)
-        kb = batch_buttons(is_batch_mode(user_id))
+        kb = batch_buttons(is_batch_mode(user_id), is_premium_user(user_id))
 
     elif data == "toggle_batch_mode":
         set_batch_mode(user_id, not is_batch_mode(user_id))
         text = batch_text(user_id)
-        kb = batch_buttons(is_batch_mode(user_id))
+        kb = batch_buttons(is_batch_mode(user_id), is_premium_user(user_id))
 
     elif data == "set_batch_links":
         set_user_state(user_id, "set_batch_links")
-        await callback_query.message.reply_text(
-            "📥 Ab multiple Telegram links bhejo.\nRange format bhi de sakte ho like:\n[https://t.me/channel/39-69]\n\n/cancel bhej kar cancel kar sakte ho."
-        )
+        await callback_query.message.reply_text("📥 Ab multiple Telegram links bhejo.\nRange format bhi de sakte ho like:\n[https://t.me/channel/39-69]\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "clear_batch_links":
         save_batch_input(user_id, "")
         text = batch_text(user_id)
-        kb = batch_buttons(is_batch_mode(user_id))
+        kb = batch_buttons(is_batch_mode(user_id), is_premium_user(user_id))
 
     elif data == "start_batch_now":
         batch_input = get_batch_input(user_id)
@@ -1722,11 +1742,7 @@ async def all_callbacks(client, callback_query):
         return
 
     try:
-        await callback_query.message.edit_text(
-            text,
-            reply_markup=kb,
-            disable_web_page_preview=True
-        )
+        await callback_query.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     except Exception:
         pass
 
@@ -1737,6 +1753,7 @@ async def all_callbacks(client, callback_query):
 async def catch_all(client, message):
     register_user(message.from_user)
     user_id = message.from_user.id
+    cleanup_expired_premium_users()
 
     blocked = await check_force_sub(client, message)
     if blocked:
@@ -1799,9 +1816,7 @@ async def catch_all(client, message):
     if state == "set_batch_links" and not lowered.startswith("/cancel"):
         save_batch_input(user_id, text_raw)
         clear_user_state(user_id)
-        await message.reply_text(
-            "✅ Batch links save ho gaye.\n/settings me Batch section se Start Batch chala sakte ho."
-        )
+        await message.reply_text("✅ Batch links save ho gaye.\n/settings me Batch section se Start Batch chala sakte ho.")
         return
 
     if is_index_mode(user_id):
@@ -1839,31 +1854,17 @@ async def catch_all(client, message):
 
         if setting_key == "thumbnail_file_id":
             if message.photo:
-                update_user_settings(
-                    user_id,
-                    {
-                        "thumbnail_file_id": message.photo.file_id,
-                        "thumbnail_enabled": True
-                    }
-                )
+                update_user_settings(user_id, {"thumbnail_file_id": message.photo.file_id, "thumbnail_enabled": True})
                 clear_user_state(user_id)
                 await message.reply_text("✅ Custom thumbnail save ho gaya.\n\n/settings bhejo dekhne ke liye.")
                 return
             else:
-                await message.reply_text(
-                    "❌ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho."
-                )
+                await message.reply_text("❌ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho.")
                 return
 
         if setting_key:
             value = text
-
-            if setting_key in {
-                "caption_index_padding",
-                "caption_index_start",
-                "filename_index_padding",
-                "filename_index_start",
-            }:
+            if setting_key in {"caption_index_padding", "caption_index_start", "filename_index_padding", "filename_index_start"}:
                 if not value.isdigit():
                     await message.reply_text("❌ Yahan sirf number bhejo.\n/cancel bhej kar cancel kar sakte ho.")
                     return
@@ -1881,9 +1882,7 @@ async def catch_all(client, message):
                 update_user_settings(user_id, {"metadata_enabled": True})
 
             clear_user_state(user_id)
-            await message.reply_text(
-                f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye."
-            )
+            await message.reply_text(f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye.")
             return
 
     if await handle_admin_commands(client, message, lowered):
@@ -1903,7 +1902,7 @@ async def catch_all(client, message):
         reset_user_index_counter(user_id)
         await message.reply_text(
             start_text() + "\n\n🔄 Tumhara current user index reset ho gaya hai. Ab next item `01` se start hoga.",
-            reply_markup=start_buttons(has_user_session(user_id)),
+            reply_markup=build_start_markup(user_id),
             disable_web_page_preview=True,
         )
         return
@@ -1932,16 +1931,12 @@ async def catch_all(client, message):
         if has_user_session(user_id):
             await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(True))
             return
-
         set_user_state(user_id, "login_phone")
         await message.reply_text(ask_phone_text())
         return
 
     if lowered.startswith("/login_status"):
-        await message.reply_text(
-            login_status_text(user_id),
-            reply_markup=login_buttons(has_user_session(user_id))
-        )
+        await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(has_user_session(user_id)))
         return
 
     if lowered.startswith("/logout"):
@@ -1955,11 +1950,7 @@ async def catch_all(client, message):
 
     if lowered.startswith("/my_tasks"):
         tasks = get_user_tasks(user_id, limit=10)
-        await message.reply_text(
-            my_tasks_text(tasks),
-            reply_markup=my_tasks_buttons(),
-            disable_web_page_preview=True,
-        )
+        await message.reply_text(my_tasks_text(tasks), reply_markup=my_tasks_buttons(), disable_web_page_preview=True)
         return
 
     await message.reply_text(unknown_text())

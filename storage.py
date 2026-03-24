@@ -1,7 +1,9 @@
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 
 from config import (
     SETTINGS_FILE,
@@ -13,6 +15,21 @@ from config import (
     SESSION_STORE_FILE,
     TASKS_FILE,
 )
+
+# ================= PREMIUM / SUPABASE CONFIG =================
+
+DATA_DIR = os.path.dirname(SETTINGS_FILE) or "data"
+PREMIUM_FILE = os.getenv("PREMIUM_FILE", os.path.join(DATA_DIR, "premium_users.json"))
+
+SUPABASE_URL = str(os.getenv("SUPABASE_URL", "") or "").strip().rstrip("/")
+SUPABASE_KEY = str(os.getenv("SUPABASE_KEY", "") or "").strip()
+SUPABASE_PREMIUM_TABLE = str(os.getenv("SUPABASE_PREMIUM_TABLE", "premium_users") or "premium_users").strip()
+
+FREE_MAX_BATCH_LINKS = int(os.getenv("FREE_MAX_BATCH_LINKS", "50") or "50")
+PREMIUM_MAX_BATCH_LINKS = int(os.getenv("PREMIUM_MAX_BATCH_LINKS", "300") or "300")
+FREE_MAX_TASKS_PER_USER = int(os.getenv("FREE_MAX_TASKS_PER_USER", "3") or "3")
+PREMIUM_MAX_TASKS_PER_USER = int(os.getenv("PREMIUM_MAX_TASKS_PER_USER", "10") or "10")
+
 
 DEFAULT_SETTINGS = {
     # Upload Mode
@@ -159,6 +176,25 @@ def _normalize_upload_mode(value) -> str:
     return "media"
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
 def _normalize_settings(data: dict):
     merged = DEFAULT_SETTINGS.copy()
     if isinstance(data, dict):
@@ -210,6 +246,241 @@ def _normalize_settings(data: dict):
         merged[key] = str(merged.get(key, "") or "")
 
     return merged
+
+
+# ================= PREMIUM HELPERS =================
+
+def _supabase_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+def _supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+
+def _supabase_request(method: str, path: str, payload=None):
+    if not _supabase_enabled():
+        raise RuntimeError("Supabase not configured")
+
+    url = f"{SUPABASE_URL}{path}"
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(url=url, data=data, method=method, headers=_supabase_headers())
+    try:
+        with urllib_request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else None
+    except urllib_error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")
+        except Exception:
+            body = ""
+        raise RuntimeError(f"Supabase HTTPError {e.code}: {body}")
+    except Exception as e:
+        raise RuntimeError(f"Supabase request failed: {e}")
+
+
+def _normalize_premium_record(user_id: int, data=None):
+    data = data or {}
+    return {
+        "user_id": int(user_id),
+        "is_premium": bool(data.get("is_premium", False)),
+        "plan_name": str(data.get("plan_name", "") or ""),
+        "premium_expires_at": str(data.get("premium_expires_at", "") or ""),
+        "granted_by": int(data.get("granted_by", 0) or 0),
+        "granted_at": str(data.get("granted_at", "") or ""),
+        "notes": str(data.get("notes", "") or ""),
+        "updated_at": str(data.get("updated_at", "") or ""),
+    }
+
+
+def _compute_expiry_from_duration(duration_text: str):
+    duration_text = str(duration_text or "").strip().lower()
+    if not duration_text:
+        return None
+
+    match = re.fullmatch(r"(\d+)\s*([dhmwy]|day|days|hour|hours|month|months|week|weeks|year|years)", duration_text)
+    if not match:
+        return None
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    now = datetime.now(timezone.utc)
+
+    if unit in {"h", "hour", "hours"}:
+        return (now + timedelta(hours=value)).isoformat()
+    if unit in {"d", "day", "days"}:
+        return (now + timedelta(days=value)).isoformat()
+    if unit in {"w", "week", "weeks"}:
+        return (now + timedelta(weeks=value)).isoformat()
+    if unit in {"m", "month", "months"}:
+        return (now + timedelta(days=30 * value)).isoformat()
+    if unit in {"y", "year", "years"}:
+        return (now + timedelta(days=365 * value)).isoformat()
+
+    return None
+
+
+def get_all_premium_users():
+    if _supabase_enabled():
+        try:
+            rows = _supabase_request("GET", f"/rest/v1/{SUPABASE_PREMIUM_TABLE}?select=*")
+            result = {}
+            for row in rows or []:
+                uid = str(int(row.get("user_id", 0) or 0))
+                if uid != "0":
+                    result[uid] = _normalize_premium_record(int(uid), row)
+            return result
+        except Exception:
+            pass
+
+    data = load_json(PREMIUM_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_all_premium_users(data):
+    if _supabase_enabled():
+        try:
+            payload = []
+            for uid, row in (data or {}).items():
+                record = _normalize_premium_record(int(uid), row)
+                record["updated_at"] = _now_iso()
+                payload.append(record)
+            _supabase_request("POST", f"/rest/v1/{SUPABASE_PREMIUM_TABLE}?on_conflict=user_id", payload)
+            return
+        except Exception:
+            pass
+
+    save_json(PREMIUM_FILE, data)
+
+
+def get_premium_record(user_id: int):
+    all_users = get_all_premium_users()
+    raw = all_users.get(str(user_id), {})
+    return _normalize_premium_record(user_id, raw)
+
+
+def save_premium_record(user_id: int, data: dict):
+    current = get_premium_record(user_id)
+    if isinstance(data, dict):
+        current.update(data)
+
+    current = _normalize_premium_record(user_id, current)
+    current["updated_at"] = _now_iso()
+
+    if _supabase_enabled():
+        try:
+            _supabase_request(
+                "POST",
+                f"/rest/v1/{SUPABASE_PREMIUM_TABLE}?on_conflict=user_id",
+                [current],
+            )
+            return
+        except Exception:
+            pass
+
+    all_users = get_all_premium_users()
+    all_users[str(user_id)] = current
+    save_all_premium_users(all_users)
+
+
+def delete_premium_record(user_id: int):
+    if _supabase_enabled():
+        try:
+            _supabase_request("DELETE", f"/rest/v1/{SUPABASE_PREMIUM_TABLE}?user_id=eq.{int(user_id)}")
+            return
+        except Exception:
+            pass
+
+    all_users = get_all_premium_users()
+    all_users.pop(str(user_id), None)
+    save_all_premium_users(all_users)
+
+
+def is_premium_expired(user_id: int) -> bool:
+    record = get_premium_record(user_id)
+    if not record.get("is_premium"):
+        return True
+
+    expiry = _parse_iso(record.get("premium_expires_at", ""))
+    if not expiry:
+        return False
+
+    return datetime.now(timezone.utc) >= expiry
+
+
+def is_premium_user(user_id: int) -> bool:
+    record = get_premium_record(user_id)
+    if not record.get("is_premium"):
+        return False
+
+    if is_premium_expired(user_id):
+        remove_premium(user_id)
+        return False
+
+    return True
+
+
+def add_premium(user_id: int, duration_text: str = "", granted_by: int = 0, plan_name: str = "Premium", notes: str = ""):
+    expires_at = _compute_expiry_from_duration(duration_text) if duration_text else ""
+    record = {
+        "is_premium": True,
+        "plan_name": str(plan_name or "Premium"),
+        "premium_expires_at": expires_at,
+        "granted_by": int(granted_by or 0),
+        "granted_at": _now_iso(),
+        "notes": str(notes or ""),
+    }
+    save_premium_record(user_id, record)
+    return get_premium_record(user_id)
+
+
+def remove_premium(user_id: int):
+    save_premium_record(user_id, {
+        "is_premium": False,
+        "plan_name": "",
+        "premium_expires_at": "",
+        "notes": "",
+    })
+    return get_premium_record(user_id)
+
+
+def get_premium_expiry_text(user_id: int) -> str:
+    record = get_premium_record(user_id)
+    return str(record.get("premium_expires_at", "") or "")
+
+
+def get_user_batch_limit(user_id: int) -> int:
+    return PREMIUM_MAX_BATCH_LINKS if is_premium_user(user_id) else FREE_MAX_BATCH_LINKS
+
+
+def get_user_task_limit(user_id: int) -> int:
+    return PREMIUM_MAX_TASKS_PER_USER if is_premium_user(user_id) else FREE_MAX_TASKS_PER_USER
+
+
+def cleanup_expired_premium_users():
+    all_users = get_all_premium_users()
+    changed = False
+
+    for uid in list(all_users.keys()):
+        record = _normalize_premium_record(int(uid), all_users.get(uid, {}))
+        if record.get("is_premium"):
+            expiry = _parse_iso(record.get("premium_expires_at", ""))
+            if expiry and datetime.now(timezone.utc) >= expiry:
+                record["is_premium"] = False
+                record["plan_name"] = ""
+                record["premium_expires_at"] = ""
+                record["updated_at"] = _now_iso()
+                all_users[uid] = record
+                changed = True
+
+    if changed:
+        save_all_premium_users(all_users)
 
 
 # ================= SETTINGS =================
@@ -304,6 +575,7 @@ def get_settings_marks(user_id: int):
         "index_mode": "✅" if is_index_mode(user_id) else "❌",
         "login": "✅" if has_user_session(user_id) else "❌",
         "batch_mode": "✅" if s.get("batch_mode") else "❌",
+        "premium": "💎" if is_premium_user(user_id) else "🆓",
     }
 
 

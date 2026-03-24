@@ -1,4 +1,4 @@
-from config import APP_NAME
+from config import APP_NAME, DEFAULT_PREMIUM_PLAN_NAME
 from storage import (
     get_user_settings,
     get_index_user_count,
@@ -6,6 +6,10 @@ from storage import (
     is_index_mode,
     has_user_session,
     is_batch_mode,
+    is_premium_user,
+    get_premium_expiry_text,
+    get_user_batch_limit,
+    get_user_task_limit,
 )
 
 
@@ -21,10 +25,14 @@ def _upload_mode_display(value: str) -> str:
     return "Media"
 
 
+def _premium_display(user_id: int) -> str:
+    return "Premium 💎" if is_premium_user(user_id) else "Free 🆓"
+
+
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V9**\n\n"
-        "Ye Code Devil ka working structured bot hai.\n\n"
+        f"👋 Welcome to **{APP_NAME} V10**\n\n"
+        "Ye Code Devil ka upgraded structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
         "/ping - Bot status check karo\n"
@@ -37,8 +45,8 @@ def start_text():
         "/logout - Saved login remove karo\n"
         "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V9:**\n"
-        "Dynamic upload mode switch (Media/Document) + better batch flow + improved task progress system + cleaner settings UI."
+        "**New in V10:**\n"
+        "Premium-ready structure + better UI/UX + cleaner settings + improved progress system + faster public-copy workflow."
     )
 
 
@@ -83,7 +91,9 @@ def help_text():
         "4. Space separated links bhi bhej sakte ho.\n\n"
         "**Upload Mode**\n"
         "Media mode me bot photo/video/audio ko media ki tarah bhejega.\n"
-        "Document mode me bot almost sab files ko document ki tarah bhejega."
+        "Document mode me bot almost sab files ko document ki tarah bhejega.\n\n"
+        "**Premium**\n"
+        "Premium users ko zyada batch/task limits mil sakti hain."
     )
 
 
@@ -99,7 +109,8 @@ def plan_text():
         "✅ V7 - Dynamic login/logout UI + advanced caption + advanced auto rename\n"
         "✅ V8 - Batch mode + strict force subscribe + /start index reset + range format batch links\n"
         "✅ V9 - Dynamic media/document upload mode + improved progress system + cleaner settings UI\n"
-        "🔜 V10 - More advanced tools"
+        "✅ V10 - Premium-ready system + better UI/UX + direct public copy workflow base\n"
+        "🔜 V11 - More advanced tools + database-first architecture"
     )
 
 
@@ -111,7 +122,54 @@ def terms_text():
         "3. Join ke bina bot ka koi feature use nahi hoga.\n"
         "4. Spam ya abuse mat karo.\n"
         "5. Authorized access sirf wahi chalega jahan account ka valid access ho.\n"
-        "6. Code Devil community updates ke liye channels join rakho."
+        "6. Premium misuse ya abuse hone par access remove kiya ja sakta hai.\n"
+        "7. Code Devil community updates ke liye channels join rakho."
+    )
+
+
+def premium_info_text(user_id: int):
+    status = _premium_display(user_id)
+    expiry = _safe_text(get_premium_expiry_text(user_id), "No expiry set")
+    batch_limit = get_user_batch_limit(user_id)
+    task_limit = get_user_task_limit(user_id)
+
+    return (
+        "💎 **Premium Info**\n\n"
+        f"Current Plan: **{status}**\n"
+        f"Plan Name: **{DEFAULT_PREMIUM_PLAN_NAME if is_premium_user(user_id) else 'Free'}**\n"
+        f"Expiry: **{expiry}**\n"
+        f"Batch Limit: **{batch_limit}**\n"
+        f"Task Limit: **{task_limit}**\n\n"
+        "Premium users ko higher limits aur future advanced features mil sakte hain."
+    )
+
+
+def admin_panel_text():
+    return (
+        "🛡 **Admin Panel**\n\n"
+        "Yahan se admin-related controls aur premium/help actions access kiye ja sakte hain.\n\n"
+        "**Useful Commands:**\n"
+        "/stats\n"
+        "/users\n"
+        "/ban user_id\n"
+        "/unban user_id\n"
+        "/broadcast your message\n\n"
+        "**Premium command examples:**\n"
+        "/add_premium user_id 30d\n"
+        "/remove_premium user_id\n"
+        "/premium_status user_id"
+    )
+
+
+def admin_premium_help_text():
+    return (
+        "💎 **Premium Admin Help**\n\n"
+        "Suggested command style:\n"
+        "`/add_premium user_id 30d`\n"
+        "`/remove_premium user_id`\n"
+        "`/premium_status user_id`\n\n"
+        "Duration examples:\n"
+        "`7d`, `30d`, `12h`, `4w`, `1m`, `1y`"
     )
 
 
@@ -123,6 +181,7 @@ def settings_home_text(user_id: int):
 
     return (
         f"⚙️ **Settings for User**\n\n"
+        f"Plan: **{_premium_display(user_id)}**\n"
         f"Upload Mode: **{upload_mode}**\n"
         f"Custom Thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
         f"Caption: **{'Enabled' if s.get('caption_enabled') else 'Disabled'}**\n"
@@ -138,7 +197,9 @@ def settings_home_text(user_id: int):
         f"Replace Words: **{_safe_text(s.get('replace_words'))}**\n"
         f"Index Mode: **{'Enabled' if is_index_mode(user_id) else 'Disabled'}**\n"
         f"Batch Mode: **{batch_status}**\n"
-        f"Authorized Login: **{login_status}**\n\n"
+        f"Authorized Login: **{login_status}**\n"
+        f"Batch Limit: **{get_user_batch_limit(user_id)}**\n"
+        f"Task Limit: **{get_user_task_limit(user_id)}**\n\n"
         "Niche buttons se sab setting manage kar sakte ho."
     )
 
@@ -320,7 +381,9 @@ def batch_text(user_id: int):
     current = s.get("batch_last_input") or "None"
     return (
         "📦 **Batch Mode Setting**\n\n"
-        f"Batch mode: **{'Enabled' if is_batch_mode(user_id) else 'Disabled'}**\n\n"
+        f"Batch mode: **{'Enabled' if is_batch_mode(user_id) else 'Disabled'}**\n"
+        f"Current tier: **{_premium_display(user_id)}**\n"
+        f"Your batch limit: **{get_user_batch_limit(user_id)}**\n\n"
         "Batch ON hone par multiple Telegram links ek saath process kar sakte ho.\n\n"
         "**Supported formats:**\n"
         "1. Single link:\n"
