@@ -366,6 +366,57 @@ def ensure_task_not_cancelled(task_id: str):
         raise RuntimeError("Task cancelled by user")
 
 
+def human_bytes(value: float) -> str:
+    try:
+        value = float(value)
+    except Exception:
+        value = 0.0
+
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+    return f"{value:.2f} {units[idx]}"
+
+
+def human_speed(bytes_per_sec: float) -> str:
+    return f"{human_bytes(bytes_per_sec)}/s"
+
+
+def human_eta(seconds: float) -> str:
+    try:
+        seconds = int(max(0, seconds))
+    except Exception:
+        seconds = 0
+
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+
+def build_settings_home_markup(user_id: int):
+    marks = get_settings_marks(user_id)
+    has_session = has_user_session(user_id)
+    upload_mode = get_user_settings(user_id).get("upload_mode", "media")
+
+    try:
+        return settings_home_buttons(marks, has_session, upload_mode)
+    except TypeError:
+        return settings_home_buttons(marks, has_session)
+
+
+def build_upload_mode_message(user_id: int):
+    try:
+        return upload_mode_text(user_id)
+    except TypeError:
+        return upload_mode_text()
+
+
 async def update_task_status_message(client, task_id: str, done: bool = False):
     task = get_task(task_id)
     if not task:
@@ -429,13 +480,34 @@ async def throttled_progress_update(client, task_id: str):
 async def progress_callback(current, total, client, task_id: str, stage: str):
     ensure_task_not_cancelled(task_id)
 
-    percent = 0
+    task = get_task(task_id) or {}
+    now = time.time()
+
+    started_key = f"{stage}_started_at"
+    if not task.get(started_key):
+        set_task(task_id, {started_key: now})
+        task = get_task(task_id) or {}
+
+    started_at = float(task.get(started_key, now) or now)
+    elapsed = max(now - started_at, 0.001)
+
+    percent = 0.0
     if total:
         percent = round((current / total) * 100, 2)
 
+    speed = current / elapsed if elapsed > 0 else 0.0
+    remaining = max((total - current), 0) if total else 0
+    eta = (remaining / speed) if speed > 0 and total else 0
+
+    progress_parts = [f"{percent:.2f}% ({human_bytes(current)}/{human_bytes(total)})"]
+    if speed > 0:
+        progress_parts.append(f"Speed: {human_speed(speed)}")
+    if total and speed > 0:
+        progress_parts.append(f"ETA: {human_eta(eta)}")
+
     set_task(task_id, {
         "status": stage,
-        "progress_text": f"{percent:.2f}% ({current}/{total})",
+        "progress_text": " | ".join(progress_parts),
     })
     await throttled_progress_update(client, task_id)
 
@@ -602,8 +674,21 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
     thumb_path = None
 
     try:
+        upload_mode = str(settings.get("upload_mode", "media") or "media").strip().lower()
+
         if source_msg.video or source_msg.document or source_msg.audio:
             thumb_path = await get_thumbnail_temp_path(client, settings, task_id=task_id)
+
+        if upload_mode == "document":
+            return await client.send_document(
+                chat_id=target,
+                document=file_path,
+                caption=caption if caption else None,
+                thumb=thumb_path if thumb_path else None,
+                message_thread_id=topic_id if topic_id else None,
+                progress=progress_callback,
+                progress_args=(client, task_id, "uploading"),
+            )
 
         if source_msg.photo:
             return await client.send_photo(
@@ -1248,11 +1333,18 @@ async def all_callbacks(client, callback_query):
 
     if data == "show_settings_home":
         text = settings_home_text(user_id)
-        kb = settings_home_buttons(marks, has_user_session(user_id))
+        kb = build_settings_home_markup(user_id)
 
     elif data == "show_upload_mode":
-        text = upload_mode_text()
+        text = build_upload_mode_message(user_id)
         kb = submenu_nav()
+
+    elif data == "toggle_upload_mode":
+        current = str(s.get("upload_mode", "media") or "media").strip().lower()
+        new_mode = "document" if current == "media" else "media"
+        update_user_settings(user_id, {"upload_mode": new_mode})
+        text = settings_home_text(user_id)
+        kb = build_settings_home_markup(user_id)
 
     elif data == "show_thumbnail":
         text = thumbnail_text(user_id)
@@ -1573,7 +1665,7 @@ async def all_callbacks(client, callback_query):
         current = is_index_mode(user_id)
         set_index_mode(user_id, not current)
         text = settings_home_text(user_id)
-        kb = settings_home_buttons(get_settings_marks(user_id), has_user_session(user_id))
+        kb = build_settings_home_markup(user_id)
 
     elif data == "show_index_stats":
         text = index_stats_text(user_id)
@@ -1615,7 +1707,7 @@ async def all_callbacks(client, callback_query):
         reset_user_settings(user_id)
         clear_user_state(user_id)
         text = settings_home_text(user_id)
-        kb = settings_home_buttons(get_settings_marks(user_id), has_user_session(user_id))
+        kb = build_settings_home_markup(user_id)
 
     elif data == "close_settings":
         try:
@@ -1831,7 +1923,7 @@ async def catch_all(client, message):
     if lowered.startswith("/settings"):
         await message.reply_text(
             settings_home_text(user_id),
-            reply_markup=settings_home_buttons(get_settings_marks(user_id), has_user_session(user_id)),
+            reply_markup=build_settings_home_markup(user_id),
             disable_web_page_preview=True,
         )
         return

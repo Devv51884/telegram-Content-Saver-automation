@@ -24,7 +24,7 @@ def start_web():
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Code Devil Restricted Saver V8...")
+    print("🚀 Starting Code Devil Restricted Saver V9...")
 
     web_thread = threading.Thread(target=start_web, daemon=True)
     web_thread.start()

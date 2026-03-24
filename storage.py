@@ -15,7 +15,11 @@ from config import (
 )
 
 DEFAULT_SETTINGS = {
-    "upload_mode": "Telegram",
+    # Upload Mode
+    # Supported internally:
+    # - media
+    # - document
+    "upload_mode": "media",
 
     # Thumbnail
     "thumbnail_enabled": False,
@@ -143,10 +147,24 @@ def _to_bool(value, default=False):
         return default
 
 
+def _normalize_upload_mode(value) -> str:
+    value = str(value or "").strip().lower()
+
+    if value in {"document", "doc", "file"}:
+        return "document"
+
+    if value in {"media", "telegram", "video", "photo", "audio"}:
+        return "media"
+
+    return "media"
+
+
 def _normalize_settings(data: dict):
     merged = DEFAULT_SETTINGS.copy()
     if isinstance(data, dict):
         merged.update(data)
+
+    merged["upload_mode"] = _normalize_upload_mode(merged.get("upload_mode", "media"))
 
     merged["caption_index_padding"] = max(1, _to_int(merged.get("caption_index_padding", 2), 2))
     merged["caption_index_start"] = max(0, _to_int(merged.get("caption_index_start", 1), 1))
@@ -260,10 +278,15 @@ def setting_mark(value) -> str:
     return "✅" if is_value_set(value) else "❌"
 
 
+def get_upload_mode_label(user_id: int) -> str:
+    mode = get_user_settings(user_id).get("upload_mode", "media")
+    return "Document" if mode == "document" else "Media"
+
+
 def get_settings_marks(user_id: int):
     s = get_user_settings(user_id)
     return {
-        "upload_mode": "✅",
+        "upload_mode": "📄" if s.get("upload_mode") == "document" else "🎞",
         "thumbnail": setting_mark(s.get("thumbnail_file_id")),
         "caption": "✅" if s.get("caption_enabled") and s.get("caption_text") else "❌",
         "prefix": setting_mark(s.get("prefix")),

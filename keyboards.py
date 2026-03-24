@@ -25,6 +25,13 @@ def _safe_url(value: str, fallback: str = "https://t.me/"):
     return fallback
 
 
+def _upload_mode_button_label(mode: str) -> str:
+    mode = str(mode or "media").strip().lower()
+    if mode == "document":
+        return "📄 Send As Document"
+    return "🎞 Send As Media"
+
+
 def join_required_buttons():
     join_url = _safe_url(JOIN_LINK or MAIN_CHANNEL, "https://t.me/")
     return InlineKeyboardMarkup([
@@ -59,7 +66,7 @@ def start_buttons(has_session: bool = False):
     ])
 
 
-def settings_home_buttons(marks: dict, has_session: bool = False):
+def settings_home_buttons(marks: dict, has_session: bool = False, upload_mode: str = "media"):
     auth_button = (
         InlineKeyboardButton(
             f"{marks.get('login', '❌')} Logout",
@@ -72,11 +79,13 @@ def settings_home_buttons(marks: dict, has_session: bool = False):
         )
     )
 
+    upload_mode_label = _upload_mode_button_label(upload_mode)
+
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                f"{marks.get('upload_mode', '✅')} Upload Mode",
-                callback_data="show_upload_mode"
+                f"{marks.get('upload_mode', '🎞')} {upload_mode_label}",
+                callback_data="toggle_upload_mode"
             )
         ],
         [

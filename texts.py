@@ -14,9 +14,16 @@ def _safe_text(value, fallback="None"):
     return value if value else fallback
 
 
+def _upload_mode_display(value: str) -> str:
+    value = str(value or "").strip().lower()
+    if value == "document":
+        return "Document"
+    return "Media"
+
+
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V8**\n\n"
+        f"👋 Welcome to **{APP_NAME} V9**\n\n"
         "Ye Code Devil ka working structured bot hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
@@ -30,8 +37,8 @@ def start_text():
         "/logout - Saved login remove karo\n"
         "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V8:**\n"
-        "Batch processing + strict force subscribe + /start par user index reset + dynamic ✅❌ settings UI + batch range link support."
+        "**New in V9:**\n"
+        "Dynamic upload mode switch (Media/Document) + better batch flow + improved task progress system + cleaner settings UI."
     )
 
 
@@ -73,7 +80,10 @@ def help_text():
         "3. Range format:\n"
         "   https://t.me/Codebasics_courses_free/39-69\n"
         "   https://t.me/c/2102477197/340-360\n\n"
-        "4. Space separated links bhi bhej sakte ho."
+        "4. Space separated links bhi bhej sakte ho.\n\n"
+        "**Upload Mode**\n"
+        "Media mode me bot photo/video/audio ko media ki tarah bhejega.\n"
+        "Document mode me bot almost sab files ko document ki tarah bhejega."
     )
 
 
@@ -88,7 +98,8 @@ def plan_text():
         "✅ V6 - Login/session system + realtime task processing\n"
         "✅ V7 - Dynamic login/logout UI + advanced caption + advanced auto rename\n"
         "✅ V8 - Batch mode + strict force subscribe + /start index reset + range format batch links\n"
-        "🔜 V9 - Premium + advanced tools"
+        "✅ V9 - Dynamic media/document upload mode + improved progress system + cleaner settings UI\n"
+        "🔜 V10 - More advanced tools"
     )
 
 
@@ -108,10 +119,11 @@ def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
     login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
     batch_status = "Enabled ✅" if is_batch_mode(user_id) else "Disabled ❌"
+    upload_mode = _upload_mode_display(s.get("upload_mode", "media"))
 
     return (
         f"⚙️ **Settings for User**\n\n"
-        f"Upload Mode: **{_safe_text(s.get('upload_mode'), 'Telegram')}**\n"
+        f"Upload Mode: **{upload_mode}**\n"
         f"Custom Thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
         f"Caption: **{'Enabled' if s.get('caption_enabled') else 'Disabled'}**\n"
         f"Prefix: **{_safe_text(s.get('prefix'))}**\n"
@@ -131,11 +143,19 @@ def settings_home_text(user_id: int):
     )
 
 
-def upload_mode_text():
+def upload_mode_text(user_id: int = 0):
+    mode = "Media"
+    if user_id:
+        mode = _upload_mode_display(get_user_settings(user_id).get("upload_mode", "media"))
+
     return (
         "📤 **Upload Mode**\n\n"
-        "Abhi bot me upload mode fixed **Telegram** rakha gaya hai.\n\n"
-        "Future version me aur modes add kiye ja sakte hain."
+        f"Current upload mode: **{mode}**\n\n"
+        "**Media Mode:**\n"
+        "Photo, video, audio ko media type me bhejne ki koshish hogi.\n\n"
+        "**Document Mode:**\n"
+        "Files ko document ki tarah bheja jayega.\n\n"
+        "Settings button se mode toggle kar sakte ho."
     )
 
 
@@ -188,7 +208,7 @@ def prefix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "🏷 **Prefix Setting**\n\n"
-        "Prefix filename ke starting me add hota hai.\n\n"
+        "Prefix filename ya caption ke starting me add hota hai.\n\n"
         "Example:\n"
         "Prefix = @Code_Devil\n\n"
         "Output:\n"
@@ -202,7 +222,7 @@ def suffix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "🔖 **Suffix Setting**\n\n"
-        "Suffix filename ke end me add hota hai.\n\n"
+        "Suffix filename ya caption ke end me add hota hai.\n\n"
         "Example:\n"
         "Suffix = @Code_Devil\n\n"
         "Output:\n"
@@ -371,7 +391,8 @@ def index_info_text(user_id: int):
         "• Log channel me save karega\n"
         "• {index} caption aur rename me use ho sakta hai\n"
         "• /start bhejne par tumhara current user index reset ho jayega\n"
-        "• Batch mode me range links bhi use ho sakte hain\n\n"
+        "• Batch mode me range links bhi use ho sakte hain\n"
+        "• Upload mode Media ya Document dono me switch kiya ja sakta hai\n\n"
         "OFF karne ke liye /stop_index"
     )
 

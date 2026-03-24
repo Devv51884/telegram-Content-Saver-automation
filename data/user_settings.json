@@ -1,6 +1,6 @@
 {
   "6747712268": {
-    "upload_mode": "Telegram",
+    "upload_mode": "media",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
     "caption_enabled": true,
@@ -31,8 +31,8 @@
     "index_mode": true,
     "authorized_mode": false,
     "last_login_user_id": 0,
-    "batch_mode": false,
-    "batch_last_input": ""
+    "batch_mode": true,
+    "batch_last_input": "https://t.me/Codebasics_courses_free/39-42"
   },
   "6949344152": {
     "upload_mode": "Telegram",
