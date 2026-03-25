@@ -44,6 +44,7 @@ from config import (
     SUPABASE_STATS_TABLE,
     SUPABASE_BROADCAST_TABLE,
     PREMIUM_GRACE_HOURS,
+    TASK_STATUS_TTL_MINUTES,
 )
 
 _LOCK = Lock()
@@ -212,6 +213,64 @@ def _parse_iso(value):
         return parsed
     except Exception:
         return None
+
+
+_ACTIVE_TASK_STATUSES = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating"}
+_TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+_TASK_STATUS_TTL = max(5, _to_int(TASK_STATUS_TTL_MINUTES, 180))
+
+
+def _task_last_seen_dt(task: dict):
+    if not isinstance(task, dict):
+        return None
+    for key in ("updated_at", "created_at"):
+        parsed = _parse_iso(task.get(key, ""))
+        if parsed:
+            return parsed
+    return None
+
+
+def _is_task_stale(task: dict) -> bool:
+    if not isinstance(task, dict):
+        return False
+    status = str(task.get("status", "") or "").strip().lower()
+    if status not in _ACTIVE_TASK_STATUSES:
+        return False
+    last_seen = _task_last_seen_dt(task)
+    if not last_seen:
+        return False
+    age = _now_utc() - last_seen
+    return age > timedelta(minutes=_TASK_STATUS_TTL)
+
+
+def cleanup_stale_active_tasks():
+    tasks = get_all_tasks()
+    changed = False
+    for task_id, task in list(tasks.items()):
+        if not isinstance(task, dict):
+            continue
+        if _is_task_stale(task):
+            task = dict(task)
+            task["status"] = "failed"
+            task["current_stage"] = "failed"
+            task["error"] = task.get("error") or "Auto-closed stale task"
+            task["updated_at"] = _utcnow_naive_iso()
+            tasks[str(task_id)] = _normalize_task_record(task_id, task)
+            changed = True
+    if changed:
+        save_all_tasks(tasks)
+    return changed
+
+
+def _is_countable_running_task(task: dict) -> bool:
+    if not isinstance(task, dict):
+        return False
+    status = str(task.get("status", "") or "").strip().lower()
+    if status not in _ACTIVE_TASK_STATUSES:
+        return False
+    if _is_task_stale(task):
+        return False
+    return True
 
 
 def _ensure_dir():
@@ -477,7 +536,7 @@ def _normalize_task_record(task_id: str, data=None):
         status = "processing"
 
     progress = max(0.0, min(100.0, _to_float(data.get("progress", 0.0), 0.0)))
-    retries = max(0, _to_int(data.get("retries", 0), 0))
+    retries = max(0, _to_int(data.get("retries", data.get("retry_count", 0)), 0))
 
     extra = data.get("extra", {})
     if not isinstance(extra, dict):
@@ -492,20 +551,42 @@ def _normalize_task_record(task_id: str, data=None):
         "file_name": str(file_name or ""),
         "message": str(data.get("message", "") or ""),
         "progress": progress,
+        "progress_percent": _to_float(data.get("progress_percent", progress), progress),
+        "progress_bar_text": str(data.get("progress_bar_text", "") or ""),
         "speed": str(data.get("speed", "") or ""),
+        "speed_bps": _to_float(data.get("speed_bps", 0.0), 0.0),
         "eta": str(data.get("eta", "") or ""),
+        "eta_seconds": _to_float(data.get("eta_seconds", 0.0), 0.0),
+        "elapsed_seconds": _to_float(data.get("elapsed_seconds", 0.0), 0.0),
+        "current_bytes": _to_int(data.get("current_bytes", 0), 0),
+        "total_bytes": _to_int(data.get("total_bytes", 0), 0),
         "retries": retries,
+        "retry_count": retries,
         "created_at": str(data.get("created_at", "") or ""),
         "updated_at": str(data.get("updated_at", "") or ""),
         "destination": destination,
         "destination_raw": destination,
-        "destination_display": _format_destination_display(destination, topic_id),
+        "destination_display": str(data.get("destination_display") or _format_destination_display(destination, topic_id)),
+        "user_destination": str(data.get("user_destination") or destination or ""),
         "topic_id": topic_id,
         "upload_mode": upload_mode,
+        "current_stage": str(data.get("current_stage", "") or ""),
+        "progress_text": str(data.get("progress_text", "") or ""),
+        "error": str(data.get("error", "") or ""),
+        "queue_position": _to_int(data.get("queue_position", 0), 0),
+        "worker_id": _to_int(data.get("worker_id", 0), 0),
+        "status_chat_id": _to_int(data.get("status_chat_id", 0), 0),
+        "status_message_id": _to_int(data.get("status_message_id", 0), 0),
+        "checking_chat_id": _to_int(data.get("checking_chat_id", 0), 0),
+        "checking_message_id": _to_int(data.get("checking_message_id", 0), 0),
+        "last_ui_update": _to_float(data.get("last_ui_update", 0.0), 0.0),
+        "delivered_to": data.get("delivered_to", []),
+        "delivery_errors": data.get("delivery_errors", []),
+        "index_id": _to_int(data.get("index_id", 0), 0),
+        "user_index_no": _to_int(data.get("user_index_no", 0), 0),
         "extra": extra,
     }
 
-    # Backward-compatible shadow keys so existing bot code does not break.
     normalized["upload_destination"] = normalized["destination"]
     normalized["destination_chat_id"] = normalized["destination"]
     normalized["dest"] = normalized["destination"]
@@ -513,6 +594,10 @@ def _normalize_task_record(task_id: str, data=None):
     normalized["target_chat_id"] = normalized["destination"]
     normalized["message_thread_id"] = normalized["topic_id"]
     normalized["thread_id"] = normalized["topic_id"]
+
+    for key, value in data.items():
+        if key not in normalized:
+            normalized[key] = value
 
     return normalized
 
@@ -1357,6 +1442,20 @@ def get_all_tasks():
     else:
         normalized_local = local_tasks
 
+    def _rank(status: str) -> int:
+        order = {
+            "queued": 1,
+            "processing": 2,
+            "fetching": 3,
+            "downloading": 4,
+            "uploading": 5,
+            "copying": 6,
+            "completed": 7,
+            "failed": 7,
+            "cancelled": 7,
+        }
+        return order.get(str(status or "").lower(), 0)
+
     if _supabase_enabled():
         try:
             rows = _select_rows(SUPABASE_TASKS_TABLE) or []
@@ -1367,7 +1466,19 @@ def get_all_tasks():
                     remote[task_id] = _normalize_task_record(task_id, row)
             if ENABLE_LOCAL_FALLBACK:
                 merged = dict(normalized_local)
-                merged.update(remote)
+                for task_id, remote_task in remote.items():
+                    local_task = merged.get(task_id)
+                    if not local_task:
+                        merged[task_id] = remote_task
+                        continue
+                    local_dt = _parse_iso(local_task.get("updated_at") or local_task.get("created_at"))
+                    remote_dt = _parse_iso(remote_task.get("updated_at") or remote_task.get("created_at"))
+                    if local_dt and remote_dt:
+                        merged[task_id] = remote_task if remote_dt > local_dt else local_task
+                    elif _rank(remote_task.get("status")) > _rank(local_task.get("status")):
+                        merged[task_id] = remote_task
+                    else:
+                        merged[task_id] = local_task
                 _save_local_map(TASKS_FILE, merged)
                 return merged
             return remote
@@ -1602,6 +1713,7 @@ def hydrate_local_files():
 def initialize_storage():
     hydrate_local_files()
     normalize_existing_tasks_inplace()
+    cleanup_stale_active_tasks()
     touch_last_activity()
     cleanup_expired_premium_users()
     sync_premium_stats()
@@ -1613,7 +1725,7 @@ def get_admin_overview(limit_recent_users: int = 5):
         "banned_users": banned_count(),
         "premium_users": sync_premium_stats(),
         "recent_users": get_recent_users(limit_recent_users),
-        "running_tasks": len([task for task in get_all_tasks().values() if task.get("status") in {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating"}]),
+        "running_tasks": len([task for task in get_all_tasks().values() if _is_countable_running_task(task)]),
         "failed_tasks": len(get_failed_tasks()),
         "stats": get_stats(),
     }

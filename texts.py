@@ -12,14 +12,12 @@ from storage import (
     get_user_task_limit,
 )
 
-
 APP_VERSION_LABEL = "V12"
 
 
 def _safe_text(value, fallback="None"):
     value = str(value or "").strip()
     return value if value else fallback
-
 
 
 def _upload_mode_display(value: str) -> str:
@@ -29,20 +27,16 @@ def _upload_mode_display(value: str) -> str:
     return "Media"
 
 
-
 def _premium_display(user_id: int) -> str:
     return "Premium 💎" if is_premium_user(user_id) else "Free 🆓"
-
 
 
 def _yes_no_enabled(value: bool) -> str:
     return "Enabled ✅" if value else "Disabled ❌"
 
 
-
 def _exists_text(value) -> str:
     return "Exists ✅" if value else "None"
-
 
 
 def _task_destination_display(task: dict) -> str:
@@ -69,7 +63,6 @@ def _task_destination_display(task: dict) -> str:
     return "Not Set"
 
 
-
 def _task_topic_display(task: dict) -> str:
     if not isinstance(task, dict):
         return "None"
@@ -78,7 +71,6 @@ def _task_topic_display(task: dict) -> str:
         if value:
             return value
     return "None"
-
 
 
 def start_text():
@@ -100,7 +92,6 @@ def start_text():
         "**Highlights:**\n"
         "Cleaner task destination display + stronger task schema sync + better retry-friendly wording + premium-ready settings flow."
     )
-
 
 
 def help_text():
@@ -150,7 +141,6 @@ def help_text():
     )
 
 
-
 def plan_text():
     return (
         "🛣️ **Code Devil Bot Roadmap**\n\n"
@@ -170,7 +160,6 @@ def plan_text():
     )
 
 
-
 def terms_text():
     return (
         "📜 **Terms / Rules**\n\n"
@@ -182,7 +171,6 @@ def terms_text():
         "6. Premium misuse ya abuse hone par access remove kiya ja sakta hai.\n"
         "7. Code Devil community updates ke liye channels join rakho."
     )
-
 
 
 def premium_info_text(user_id: int):
@@ -202,7 +190,6 @@ def premium_info_text(user_id: int):
     )
 
 
-
 def admin_panel_text():
     return (
         "🛡 **Admin Panel**\n\n"
@@ -220,7 +207,6 @@ def admin_panel_text():
     )
 
 
-
 def admin_premium_help_text():
     return (
         "💎 **Premium Admin Help**\n\n"
@@ -231,7 +217,6 @@ def admin_premium_help_text():
         "Duration examples:\n"
         "`7d`, `30d`, `12h`, `4w`, `1m`, `1y`"
     )
-
 
 
 def settings_home_text(user_id: int):
@@ -265,7 +250,6 @@ def settings_home_text(user_id: int):
     )
 
 
-
 def upload_mode_text(user_id: int = 0):
     mode = "Media"
     if user_id:
@@ -282,7 +266,6 @@ def upload_mode_text(user_id: int = 0):
     )
 
 
-
 def thumbnail_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -292,7 +275,6 @@ def thumbnail_text(user_id: int):
         "Send a photo to save it as custom thumbnail.\n"
         "Timeout: 60 sec"
     )
-
 
 
 def caption_text(user_id: int):
@@ -329,7 +311,6 @@ def caption_text(user_id: int):
     )
 
 
-
 def prefix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -344,7 +325,6 @@ def prefix_text(user_id: int):
     )
 
 
-
 def suffix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -357,7 +337,6 @@ def suffix_text(user_id: int):
         f"Current suffix: **{_safe_text(s.get('suffix'))}**\n\n"
         "Send Suffix. Timeout: 60 sec"
     )
-
 
 
 def auto_rename_text(user_id: int):
@@ -385,7 +364,6 @@ def auto_rename_text(user_id: int):
     )
 
 
-
 def destination_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -399,7 +377,6 @@ def destination_text(user_id: int):
     )
 
 
-
 def topic_id_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -408,7 +385,6 @@ def topic_id_text(user_id: int):
         f"Current topic id: **{_safe_text(s.get('topic_id'))}**\n\n"
         "Send Topic ID. Timeout: 60 sec"
     )
-
 
 
 def replace_words_text(user_id: int):
@@ -425,7 +401,6 @@ def replace_words_text(user_id: int):
     )
 
 
-
 def metadata_home_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -438,7 +413,6 @@ def metadata_home_text(user_id: int):
     )
 
 
-
 def metadata_field_text(user_id: int, label: str, key: str):
     s = get_user_settings(user_id)
     return (
@@ -446,7 +420,6 @@ def metadata_field_text(user_id: int, label: str, key: str):
         f"Current value: **{_safe_text(s.get(key))}**\n\n"
         f"Send {label}. Timeout: 60 sec"
     )
-
 
 
 def batch_text(user_id: int):
@@ -475,7 +448,6 @@ def batch_text(user_id: int):
     )
 
 
-
 def unknown_text():
     return (
         "🤖 Mujhe ye commands bhejo:\n\n"
@@ -493,7 +465,6 @@ def unknown_text():
     )
 
 
-
 def index_started_text(user_id: int):
     return (
         "🧠 **Index Mode On**\n\n"
@@ -504,13 +475,8 @@ def index_started_text(user_id: int):
     )
 
 
-
 def index_stopped_text(user_id: int):
-    return (
-        "🛑 **Index Mode Off**\n\n"
-        "Auto indexing band kar di gayi hai."
-    )
-
+    return "🛑 **Index Mode Off**\n\nAuto indexing band kar di gayi hai."
 
 
 def index_stats_text(user_id: int):
@@ -519,7 +485,6 @@ def index_stats_text(user_id: int):
         f"Your indexed items: **{get_index_user_count(user_id)}**\n"
         f"Total indexed items: **{index_count()}**"
     )
-
 
 
 def index_info_text(user_id: int):
@@ -538,7 +503,6 @@ def index_info_text(user_id: int):
     )
 
 
-
 def login_intro_text():
     return (
         "🔐 **Login System**\n\n"
@@ -552,7 +516,6 @@ def login_intro_text():
     )
 
 
-
 def ask_phone_text():
     return (
         "📱 **Phone Number Bhejo**\n\n"
@@ -560,7 +523,6 @@ def ask_phone_text():
         "`+919876543210`\n\n"
         "Telegram account ka number international format me bhejo."
     )
-
 
 
 def ask_code_text():
@@ -573,14 +535,12 @@ def ask_code_text():
     )
 
 
-
 def ask_password_text():
     return (
         "🔒 **2-Step Password Bhejo**\n\n"
         "Tumhare Telegram account par cloud password enabled hai.\n"
         "Apna password bhejo."
     )
-
 
 
 def login_success_text(phone: str = ""):
@@ -593,14 +553,12 @@ def login_success_text(phone: str = ""):
     )
 
 
-
 def login_failed_text(error: str):
     return (
         "❌ **Login Failed**\n\n"
         f"Error:\n`{error}`\n\n"
         "Dobara /login try karo."
     )
-
 
 
 def login_status_text(user_id: int):
@@ -611,7 +569,6 @@ def login_status_text(user_id: int):
             "Authorized session connected hai.\n"
             f"Last Login User ID: **{s.get('last_login_user_id') or 'Unknown'}**"
         )
-
     return (
         "⚠️ **Login Status**\n\n"
         "Abhi koi authorized session connected nahi hai.\n\n"
@@ -619,102 +576,203 @@ def login_status_text(user_id: int):
     )
 
 
-
 def logout_success_text():
-    return (
-        "🚪 **Logout Successful**\n\n"
-        "Saved session remove kar di gayi hai."
-    )
-
+    return "🚪 **Logout Successful**\n\nSaved session remove kar di gayi hai."
 
 
 def logout_missing_text():
-    return (
-        "⚠️ **Logout**\n\n"
-        "Abhi koi saved session mila hi nahi."
-    )
+    return "⚠️ **Logout**\n\nAbhi koi saved session mila hi nahi."
 
+def checking_text(link_text: str = ""):
+    link_text = str(link_text or "").strip()
+    if link_text:
+        return (
+            "🔎 **Checking Link...**\n\n"
+            f"**Source:** `{link_text}`\n"
+            "Please wait, bot source access aur task readiness verify kar raha hai."
+        )
+    return "🔎 **Checking Link...**\n\nPlease wait, bot source access aur task readiness verify kar raha hai."
+
+
+
+def _stage_label(task: dict) -> str:
+    stage = str(task.get("current_stage") or task.get("status") or "processing").strip().lower()
+    labels = {
+        "queued": "Checking",
+        "processing": "Checking",
+        "fetching": "Checking",
+        "downloading": "Downloading",
+        "uploading": "Uploading",
+        "copying": "Copying",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+    }
+    return labels.get(stage, stage.title())
+
+
+def _fmt_bytes(value) -> str:
+    try:
+        value = float(value or 0)
+    except Exception:
+        value = 0.0
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+    return f"{value:.2f} {units[idx]}"
+
+
+def _fmt_speed(value) -> str:
+    try:
+        value = float(value or 0)
+    except Exception:
+        value = 0.0
+    return f"{_fmt_bytes(value)}/s"
+
+
+def _fmt_eta(value) -> str:
+    try:
+        seconds = int(float(value or 0))
+    except Exception:
+        seconds = 0
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+
+def _fmt_elapsed(value) -> str:
+    return _fmt_eta(value)
+
+
+def _user_destination_display(task: dict) -> str:
+    if not isinstance(task, dict):
+        return "Not Set"
+    for key in ("user_destination", "destination_display", "destination"):
+        value = str(task.get(key) or "").strip()
+        if value:
+            return value
+    return "Not Set"
 
 
 def task_running_text(task: dict):
-    status = task.get("status", "unknown")
+    status = str(task.get("status", "unknown"))
+    stage = _stage_label(task)
     source = task.get("source", "unknown")
-    progress = task.get("progress_text", "")
-    destination = _task_destination_display(task)
-    retries = _task_retries(task)
+    destination = _user_destination_display(task)
+    retries = task.get("retry_count", task.get("retries"))
     topic_id = _task_topic_display(task)
     upload_mode = _upload_mode_display(task.get("upload_mode", "media"))
 
-    text = (
-        f"⚡ **Task Running**\n\n"
-        f"**Status:** {status}\n"
-        f"**Source:** `{source}`\n"
-        f"**Destination:** `{destination}`\n"
-        f"**Topic ID:** `{topic_id}`\n"
-        f"**Mode:** `{upload_mode}`"
-    )
+    progress_bar_text = str(task.get("progress_bar_text") or "").strip()
+    progress_percent = task.get("progress_percent", task.get("progress"))
+    current_bytes = task.get("current_bytes", 0)
+    total_bytes = task.get("total_bytes", 0)
+    speed_bps = task.get("speed_bps", 0)
+    eta_seconds = task.get("eta_seconds", 0)
+    elapsed_seconds = task.get("elapsed_seconds", 0)
 
-    if progress:
-        text += f"\n**Progress:** {progress}"
-    if retries is not None:
-        text += f"\n**Retries:** {retries}"
+    card = [
+        "✨ **Task Processing**",
+        "",
+        f"**Stage:** `{stage}`",
+        f"**Source:** `{source}`",
+        f"**Destination:** `{destination}`",
+    ]
 
-    return text
+    if str(topic_id).strip() and str(topic_id).strip().lower() != "none":
+        card.append(f"**Topic ID:** `{topic_id}`")
+    card.append(f"**Mode:** `{upload_mode}`")
 
+    if progress_bar_text and progress_percent not in (None, ""):
+        try:
+            card.append(f"**Progress:** `{progress_bar_text}` **{float(progress_percent):.2f}%**")
+        except Exception:
+            card.append(f"**Progress:** `{progress_bar_text}`")
+    elif progress_percent not in (None, "") and str(stage).lower() not in {"checking"}:
+        try:
+            card.append(f"**Progress:** **{float(progress_percent):.2f}%**")
+        except Exception:
+            pass
+
+    if total_bytes:
+        card.append(f"**Processed:** `{_fmt_bytes(current_bytes)}` / `{_fmt_bytes(total_bytes)}`")
+    elif current_bytes and str(stage).lower() not in {"checking"}:
+        card.append(f"**Processed:** `{_fmt_bytes(current_bytes)}`")
+
+    if speed_bps:
+        card.append(f"**Speed:** `{_fmt_speed(speed_bps)}`")
+    if eta_seconds:
+        card.append(f"**ETA:** `{_fmt_eta(eta_seconds)}`")
+    if elapsed_seconds:
+        card.append(f"**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`")
+    if retries not in (None, "", 0):
+        card.append(f"**Retries:** `{retries}`")
+
+    return "\n".join(card)
 
 
 def task_completed_text(task: dict):
     progress = task.get("progress_text", "")
-    destination = _task_destination_display(task)
+    destination = _user_destination_display(task)
     topic_id = _task_topic_display(task)
-    delivered_to = task.get("delivered_to") or []
-    delivered_text = ", ".join(delivered_to) if delivered_to else destination
+    elapsed_seconds = task.get("elapsed_seconds", 0)
+
     text = (
         "✅ **Task Completed**\n\n"
         f"**Source:** `{task.get('source', 'unknown')}`\n"
-        f"**Delivered To:** `{delivered_text}`\n"
+        f"**Destination:** `{destination}`\n"
         f"**Topic ID:** `{topic_id}`"
     )
+    if elapsed_seconds:
+        text += f"\n**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`"
     if progress:
-        text += f"\n**Result:** {progress}"
+        text += f"\n**Result:** `{progress}`"
     return text
 
 
-
-def _task_retries(task: dict):
-    return task.get("retries", task.get("retry_count", 0))
-
-
 def task_failed_text(task: dict):
-    retry_note = ""
-    destination = _task_destination_display(task)
-    retries = _task_retries(task)
-    if retries is not None:
-        retry_note = f"\n**Retries Used:** `{retries}`"
-    return (
+    destination = _user_destination_display(task)
+    retries = task.get("retry_count", task.get("retries"))
+    stage = _stage_label(task)
+
+    text = (
         "❌ **Task Failed**\n\n"
+        f"**Stage:** `{stage}`\n"
         f"**Source:** `{task.get('source', 'unknown')}`\n"
         f"**Destination:** `{destination}`\n"
         f"**Error:** `{task.get('error', 'Unknown error')}`"
-        f"{retry_note}"
     )
-
+    if retries is not None:
+        text += f"\n**Retries Used:** `{retries}`"
+    return text
 
 
 def my_tasks_text(tasks: list):
     if not tasks:
-        return (
-            "📂 **My Tasks**\n\n"
-            "Abhi koi task history nahi mili."
-        )
+        return "📂 **My Tasks**\n\nAbhi koi task history nahi mili."
 
     lines = ["📂 **My Tasks**\n"]
     for i, task in enumerate(tasks[:10], start=1):
         status = task.get("status", "unknown")
         source = task.get("source", "unknown")
-        destination = _task_destination_display(task)
+        destination = _user_destination_display(task)
+        progress_percent = task.get("progress_percent", task.get("progress"))
+        stage = _stage_label(task)
+        progress_note = ""
+        if progress_percent not in (None, "") and status not in {"completed", "failed", "cancelled"}:
+            try:
+                progress_note = f" | {float(progress_percent):.1f}%"
+            except Exception:
+                progress_note = ""
+
         lines.append(
-            f"{i}. **{status}**\n"
+            f"{i}. **{stage}**{progress_note}\n"
             f"   **Source:** `{source}`\n"
             f"   **Destination:** `{destination}`"
         )

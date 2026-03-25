@@ -90,6 +90,7 @@ from texts import (
     login_status_text,
     logout_success_text,
     logout_missing_text,
+    checking_text,
     task_running_text,
     task_completed_text,
     task_failed_text,
@@ -145,6 +146,7 @@ from storage import (
     remove_premium,
     get_premium_expiry_text,
     cleanup_expired_premium_users,
+    cleanup_stale_active_tasks,
     delete_task,
 )
 
@@ -162,6 +164,12 @@ GLOBAL_MAX_RUNNING_TASKS = int(getattr(cfg, "GLOBAL_MAX_RUNNING_TASKS", 20) or 2
 QUEUE_POLL_INTERVAL = float(getattr(cfg, "QUEUE_POLL_INTERVAL", 1.0) or 1.0)
 ENABLE_TASK_DEBUG = bool(getattr(cfg, "ENABLE_TASK_DEBUG", False))
 TASK_CARD_HIDE_DELAY = int(getattr(cfg, "TASK_CARD_HIDE_DELAY", 8) or 8)
+PROGRESS_UPDATE_INTERVAL = float(getattr(cfg, "PROGRESS_UPDATE_INTERVAL", 2.0) or 2.0)
+PROGRESS_BAR_LENGTH = int(getattr(cfg, "PROGRESS_BAR_LENGTH", 10) or 10)
+SHOW_PROGRESS_BAR = bool(getattr(cfg, "SHOW_PROGRESS_BAR", True))
+SHOW_REALTIME_SPEED = bool(getattr(cfg, "SHOW_REALTIME_SPEED", True))
+SHOW_REALTIME_ETA = bool(getattr(cfg, "SHOW_REALTIME_ETA", True))
+SHOW_TRANSFERRED_SIZE = bool(getattr(cfg, "SHOW_TRANSFERRED_SIZE", True))
 
 TASK_QUEUE: asyncio.Queue = asyncio.Queue()
 TASK_WORKERS = []
@@ -495,18 +503,95 @@ def debug_log(msg: str):
         print(f"[TASK-DEBUG] {msg}")
 
 
-async def ask_login_for_private_link(message):
-    await message.reply_text(
-        "🔐 Private channel link detect hui hai.\n\n"
+async def safe_delete_message(message_obj):
+    if not message_obj:
+        return
+    try:
+        await message_obj.delete()
+    except Exception as e:
+        debug_log(f"Failed to delete temporary message: {e}")
+
+
+async def edit_or_reply(message, text: str, info_message=None):
+    try:
+        if info_message:
+            return await info_message.edit_text(text, disable_web_page_preview=True)
+    except Exception:
+        pass
+    try:
+        return await message.reply_text(text, disable_web_page_preview=True)
+    except Exception:
+        return None
+
+
+async def update_checking_message(client, task_id: str, text: str | None = None):
+    task = get_task(task_id) or {}
+    chat_id = task.get("checking_chat_id")
+    message_id = task.get("checking_message_id")
+    if not chat_id or not message_id:
+        return
+    try:
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text or checking_text(task.get("source", "")),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
+
+
+async def ensure_task_card_visible(client, task_id: str):
+    task = get_task(task_id) or {}
+    if task.get("status_chat_id") and task.get("status_message_id"):
+        return True
+
+    checking_chat_id = task.get("checking_chat_id")
+    checking_message_id = task.get("checking_message_id")
+    if not checking_chat_id or not checking_message_id:
+        return False
+
+    try:
+        await client.edit_message_text(
+            chat_id=checking_chat_id,
+            message_id=checking_message_id,
+            text=task_running_text(task),
+            reply_markup=task_buttons(task_id, done=False, status=task.get("status", "")),
+            disable_web_page_preview=True,
+        )
+        touch_task(task_id, {
+            "status_chat_id": checking_chat_id,
+            "status_message_id": checking_message_id,
+            "checking_chat_id": 0,
+            "checking_message_id": 0,
+        })
+        return True
+    except Exception as e:
+        debug_log(f"ensure_task_card_visible failed for {task_id}: {e}")
+        return False
+
+
+def should_show_processing_card(task: dict) -> bool:
+    if not isinstance(task, dict):
+        return False
+    stage = str(task.get("current_stage") or task.get("status") or "").strip().lower()
+    return stage in {"downloading", "uploading", "copying", "completed", "failed", "cancelled"}
+
+
+async def ask_login_for_private_link(message, info_message=None):
+    text = (
+        "🔐 Private channel link detect hui hai."
         "Is content ko save karne ke liye pehle /login karke apna Telegram account authorize karo."
     )
+    await edit_or_reply(message, text, info_message)
 
 
-async def ask_set_destination(message):
-    await message.reply_text(
-        "📍 Pehle apna destination set karo.\n\n"
+async def ask_set_destination(message, info_message=None):
+    text = (
+        "📍 Pehle apna destination set karo."
         "/settings → Destination me chat id ya @channelusername set karo, tabhi content save hoga."
     )
+    await edit_or_reply(message, text, info_message)
 
 
 async def ensure_background_workers_started(client):
@@ -542,14 +627,15 @@ async def task_worker(client, worker_id: int):
 
             touch_task(task_id, {
                 "status": "processing",
-                "progress_text": f"Worker-{worker_id} picked task",
+                "current_stage": "processing",
+                "progress_text": "",
                 "queue_position": 0,
                 "worker_id": worker_id,
             })
             await update_task_status_message(client, task_id, done=False)
             await _run_task_attempts(client, item)
         except Exception as e:
-            touch_task(task_id, {"status": "failed", "error": f"Worker crash: {e}"})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"Worker crash: {e}"})
             await update_task_status_message(client, task_id, done=True)
             debug_log(f"Worker-{worker_id} crashed on {task_id}: {e}")
         finally:
@@ -578,7 +664,7 @@ async def _run_task_attempts(client, item: dict):
             return True
 
         except FloodWait as e:
-            touch_task(task_id, {"status": "failed", "error": f"FloodWait: wait {e.value}s"})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"FloodWait: wait {e.value}s"})
             await update_task_status_message(client, task_id, done=True)
             await message.reply_text(f"❌ FloodWait: {e.value}s wait karo.")
             return False
@@ -589,7 +675,7 @@ async def _run_task_attempts(client, item: dict):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
 
-            touch_task(task_id, {"status": "failed", "error": str(e)})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": str(e)})
             await update_task_status_message(client, task_id, done=True)
             await message.reply_text(f"❌ Task failed:\n{e}")
             return False
@@ -610,8 +696,8 @@ async def hide_task_card_later(client, task_id: str, delay: int = TASK_CARD_HIDE
         return
     try:
         await client.delete_messages(chat_id, message_id)
-    except Exception:
-        pass
+    except Exception as e:
+        debug_log(f"Failed to update task card {task_id}: {e}")
 
 
 async def update_task_status_message(client, task_id: str, done: bool = False):
@@ -619,6 +705,16 @@ async def update_task_status_message(client, task_id: str, done: bool = False):
     if not task:
         return
 
+    # Keep queued/fetching/processing hidden behind the checking card
+    if not done and not should_show_processing_card(task):
+        await update_checking_message(client, task_id)
+        return
+
+    visible = await ensure_task_card_visible(client, task_id)
+    if not visible:
+        return
+
+    task = get_task(task_id) or {}
     chat_id = task.get("status_chat_id")
     message_id = task.get("status_message_id")
     if not chat_id or not message_id:
@@ -640,23 +736,27 @@ async def update_task_status_message(client, task_id: str, done: bool = False):
             disable_web_page_preview=True,
         )
 
-        if done and task.get("status") == "completed":
+        if done and task.get("status") in {"completed", "failed", "cancelled"}:
             asyncio.create_task(hide_task_card_later(client, task_id))
-    except Exception:
-        pass
+    except Exception as e:
+        debug_log(f"Failed to update task card {task_id}: {e}")
 
 
-async def create_task_status_message(message, task_id: str):
+async def create_task_status_message(message, task_id: str, checking_message=None):
     task = get_task(task_id)
     if not task:
         return
 
+    if checking_message:
+        touch_task(task_id, {"checking_chat_id": checking_message.chat.id, "checking_message_id": checking_message.id})
+        await update_checking_message(message._client, task_id)
+        return
+
     sent = await message.reply_text(
-        task_running_text(task),
-        reply_markup=task_buttons(task_id, done=False, status=task.get('status', '')),
+        checking_text(task.get("source", "")),
         disable_web_page_preview=True,
     )
-    touch_task(task_id, {"status_chat_id": sent.chat.id, "status_message_id": sent.id})
+    touch_task(task_id, {"checking_chat_id": sent.chat.id, "checking_message_id": sent.id})
 
 
 async def throttled_progress_update(client, task_id: str):
@@ -666,7 +766,7 @@ async def throttled_progress_update(client, task_id: str):
 
     now = time.time()
     last = float(task.get("last_ui_update", 0) or 0)
-    if now - last < 2:
+    if now - last < PROGRESS_UPDATE_INTERVAL:
         return
 
     touch_task(task_id, {"last_ui_update": now})
@@ -689,15 +789,30 @@ async def progress_callback(current, total, client, task_id: str, stage: str):
     percent = round((current / total) * 100, 2) if total else 0.0
     speed = current / elapsed if elapsed > 0 else 0.0
     remaining = max((total - current), 0) if total else 0
-    eta = (remaining / speed) if speed > 0 and total else 0
+    eta = (remaining / speed) if speed > 0 and total else 0.0
+    bar = progress_bar(percent, PROGRESS_BAR_LENGTH)
 
-    parts = [f"{progress_bar(percent)} {percent:.2f}% ({human_bytes(current)}/{human_bytes(total)})"]
-    if speed > 0:
-        parts.append(f"Speed: {human_speed(speed)}")
-    if total and speed > 0:
-        parts.append(f"ETA: {human_eta(eta)}")
+    compact_parts = []
+    if SHOW_TRANSFERRED_SIZE and total:
+        compact_parts.append(f"{human_bytes(current)} / {human_bytes(total)}")
+    if SHOW_REALTIME_SPEED and speed > 0:
+        compact_parts.append(f"{human_speed(speed)}")
+    if SHOW_REALTIME_ETA and total and speed > 0:
+        compact_parts.append(f"ETA {human_eta(eta)}")
 
-    touch_task(task_id, {"status": stage, "progress_text": " | ".join(parts)})
+    touch_task(task_id, {
+        "status": stage,
+        "current_stage": stage,
+        "current_bytes": int(current or 0),
+        "total_bytes": int(total or 0),
+        "progress": percent,
+        "progress_percent": percent,
+        "progress_bar_text": bar,
+        "speed_bps": float(speed or 0.0),
+        "eta_seconds": float(eta or 0.0),
+        "elapsed_seconds": float(elapsed or 0.0),
+        "progress_text": " • ".join(compact_parts),
+    })
     await throttled_progress_update(client, task_id)
 
 
@@ -1073,7 +1188,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
     download_path = None
 
     try:
-        touch_task(task_id, {"status": "fetching", "progress_text": "Finding source message..."})
+        touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": ""})
         await update_task_status_message(client, task_id)
 
         ensure_task_not_cancelled(task_id)
@@ -1092,16 +1207,16 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
         if not is_media_message(source_msg):
             if is_media_like_message(source_msg):
                 raise RuntimeError("Source post media-like hai but media object resolve nahi hua. Authorized login se dubara try karo.")
-            touch_task(task_id, {"status": "uploading", "progress_text": "Sending text/message..."})
+            touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
             await update_task_status_message(client, task_id)
             delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
         else:
             if direct_copy_allowed:
-                touch_task(task_id, {"status": "uploading", "progress_text": "Direct copy path..."})
+                touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
                 await update_task_status_message(client, task_id)
                 delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
             else:
-                touch_task(task_id, {"status": "downloading", "progress_text": "Starting download..."})
+                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": ""})
                 await update_task_status_message(client, task_id)
 
                 download_path = get_temp_download_path(source_msg)
@@ -1119,7 +1234,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
 
                 download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
 
-                touch_task(task_id, {"status": "uploading", "progress_text": "Preparing upload..."})
+                touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
                 await update_task_status_message(client, task_id)
 
                 delivered_to, delivery_errors = await deliver_to_destinations(
@@ -1132,6 +1247,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
 
         touch_task(task_id, {
             "status": "completed",
+            "current_stage": "completed",
             "index_id": idx_no,
             "user_index_no": user_index_no,
             "progress_text": result_note,
@@ -1175,24 +1291,48 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
     settings = get_user_settings(user_id)
     destination = normalize_target(settings.get("upload_destination", "")) or DEFAULT_DESTINATION or None
 
+    checking_message = None
+    try:
+        checking_message = await message.reply_text(
+            checking_text(link_text.strip()),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        checking_message = None
+
     if not destination:
-        await ask_set_destination(message)
+        await ask_set_destination(message, checking_message)
         return False
 
     if info and info.get("link_type") == "private" and not has_user_session(user_id):
-        await ask_login_for_private_link(message)
+        await ask_login_for_private_link(message, checking_message)
         return False
 
+    cleanup_stale_active_tasks()
     user_task_limit = min(get_user_task_limit(user_id), MAX_TASKS_PER_USER)
     running_now = count_running_tasks(user_id)
     queue_now = TASK_QUEUE.qsize()
 
     if running_now >= user_task_limit:
-        await message.reply_text(f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain.")
+        warn = f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain."
+        try:
+            if checking_message:
+                await checking_message.edit_text(warn)
+            else:
+                await message.reply_text(warn)
+        except Exception:
+            await message.reply_text(warn)
         return False
 
     if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
-        await message.reply_text("⚠️ Queue full hai. Thodi der baad try karo.")
+        warn = "⚠️ Queue full hai. Thodi der baad try karo."
+        try:
+            if checking_message:
+                await checking_message.edit_text(warn)
+            else:
+                await message.reply_text(warn)
+        except Exception:
+            await message.reply_text(warn)
         return False
 
     task_id = make_task_id()
@@ -1205,7 +1345,10 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         "destination": str(destination or ""),
         "user_destination": str(destination or ""),
         "status": "queued",
-        "progress_text": f"Queued • position {queue_position}",
+        "current_stage": "queued",
+        "progress": 0.0,
+        "progress_percent": 0.0,
+        "progress_text": "",
         "error": "",
         "retry_count": 0,
         "created_at": now_iso(),
@@ -1213,8 +1356,12 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         "upload_mode": settings.get("upload_mode", "document"),
         "topic_id": str(settings.get("topic_id", "") or ""),
         "queue_position": queue_position,
+        "status_chat_id": 0,
+        "status_message_id": 0,
+        "checking_chat_id": 0,
+        "checking_message_id": 0,
     })
-    await create_task_status_message(message, task_id)
+    await create_task_status_message(message, task_id, checking_message=checking_message)
 
     await TASK_QUEUE.put({
         "task_id": task_id,

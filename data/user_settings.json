@@ -1,6 +1,6 @@
 {
   "6747712268": {
-    "upload_mode": "media",
+    "upload_mode": "document",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
     "caption_enabled": false,
@@ -32,9 +32,9 @@
     "authorized_mode": true,
     "last_login_user_id": 6747712268,
     "batch_mode": true,
-    "batch_last_input": "https://t.me/c/3256350889/2",
+    "batch_last_input": "https://t.me/c/2243008442/27-30",
     "user_id": 6747712268,
-    "updated_at": "2026-03-25T09:10:56.354100+00:00"
+    "updated_at": "2026-03-25T17:23:52.977353+00:00"
   },
   "6949344152": {
     "upload_mode": "Telegram",

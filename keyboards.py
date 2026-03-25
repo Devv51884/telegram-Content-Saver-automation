@@ -547,8 +547,6 @@ def task_buttons(task_id: str, done: bool = False, status: str = "", can_debug: 
         [InlineKeyboardButton("🛑 Cancel", callback_data=f"task_cancel:{task_id}")],
         [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
     ]
-    if status:
-        rows.insert(0, [InlineKeyboardButton(_task_status_badge(status), callback_data="noop")])
     if can_debug:
         rows.append([InlineKeyboardButton("🧪 Details", callback_data=f"task_debug:{task_id}")])
     return InlineKeyboardMarkup(rows)
