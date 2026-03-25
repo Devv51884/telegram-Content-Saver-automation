@@ -1,12 +1,12 @@
 {
   "6747712268": {
     "user_id": 6747712268,
-    "is_premium": true,
-    "plan_name": "Premium",
-    "premium_expires_at": "2026-03-25T07:50:54.741224+00:00",
+    "is_premium": false,
+    "plan_name": "",
+    "premium_expires_at": "",
     "granted_by": 6747712268,
     "granted_at": "2026-03-24T07:50:54.741224+00:00",
     "notes": "",
-    "updated_at": "2026-03-24T07:50:54.748296+00:00"
+    "updated_at": "2026-03-25T08:01:28.598263+00:00"
   }
 }

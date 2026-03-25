@@ -36,6 +36,28 @@ def _premium_label(is_premium: bool) -> str:
     return "💎 Premium" if is_premium else "🆓 Free"
 
 
+def _yes_no_label(enabled: bool, on_text: str, off_text: str) -> str:
+    return on_text if enabled else off_text
+
+
+def _task_status_badge(status: str) -> str:
+    value = str(status or "queued").strip().lower()
+    mapping = {
+        "queued": "🕒 Queued",
+        "validating": "🔎 Validating",
+        "fetching": "📥 Fetching",
+        "downloading": "📥 Downloading",
+        "processing": "⚙️ Processing",
+        "uploading": "📤 Uploading",
+        "copying": "🚀 Copying",
+        "completed": "✅ Completed",
+        "failed": "❌ Failed",
+        "cancelled": "🛑 Cancelled",
+    }
+    return mapping.get(value, f"ℹ️ {value.title()}")
+
+
+# ---------- START / ACCESS ----------
 def join_required_buttons():
     join_url = _safe_url(JOIN_LINK or MAIN_CHANNEL, "https://t.me/")
     return InlineKeyboardMarkup([
@@ -66,21 +88,22 @@ def start_buttons(has_session: bool = False, is_admin: bool = False, is_premium:
         [
             InlineKeyboardButton(_premium_label(is_premium), callback_data="show_premium_info"),
         ],
-        [
-            auth_button,
-            InlineKeyboardButton("⚙️ Settings", callback_data="show_settings_home"),
-        ],
     ]
 
     if is_admin:
-        rows.insert(
-            -1,
-            [InlineKeyboardButton("🛡 Admin Panel", callback_data="show_admin_panel")]
-        )
+        rows.append([
+            InlineKeyboardButton("🛡 Admin Panel", callback_data="show_admin_panel")
+        ])
+
+    rows.append([
+        auth_button,
+        InlineKeyboardButton("⚙️ Settings", callback_data="show_settings_home"),
+    ])
 
     return InlineKeyboardMarkup(rows)
 
 
+# ---------- SETTINGS HOME ----------
 def settings_home_buttons(
     marks: dict,
     has_session: bool = False,
@@ -192,6 +215,7 @@ def settings_home_buttons(
     return InlineKeyboardMarkup(rows)
 
 
+# ---------- ADMIN / PREMIUM ----------
 def admin_panel_buttons():
     return InlineKeyboardMarkup([
         [
@@ -201,6 +225,14 @@ def admin_panel_buttons():
         [
             InlineKeyboardButton("💎 Premium", callback_data="admin_premium_help"),
             InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast_help"),
+        ],
+        [
+            InlineKeyboardButton("🆕 Recent Users", callback_data="admin_recent_users"),
+            InlineKeyboardButton("🧾 Logs", callback_data="admin_logs_summary"),
+        ],
+        [
+            InlineKeyboardButton("🧪 Task Debug", callback_data="admin_task_debug_help"),
+            InlineKeyboardButton("📌 Destinations", callback_data="admin_destination_help"),
         ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
@@ -216,6 +248,10 @@ def premium_info_buttons(is_admin: bool = False):
         rows.append([InlineKeyboardButton("💎 Premium Admin Help", callback_data="admin_premium_help")])
 
     rows.append([
+        InlineKeyboardButton("📈 My Limits", callback_data="show_user_limits"),
+        InlineKeyboardButton("🪪 My Plan", callback_data="show_premium_info"),
+    ])
+    rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
         InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
@@ -223,6 +259,70 @@ def premium_info_buttons(is_admin: bool = False):
     return InlineKeyboardMarkup(rows)
 
 
+def admin_users_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🆕 Recent", callback_data="admin_recent_users"),
+            InlineKeyboardButton("🔎 Search", callback_data="admin_user_search_help"),
+        ],
+        [
+            InlineKeyboardButton("💎 Premium List", callback_data="admin_premium_list"),
+            InlineKeyboardButton("📊 User Stats", callback_data="admin_stats"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def admin_premium_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕ Add Premium", callback_data="admin_add_premium_help"),
+            InlineKeyboardButton("➖ Remove Premium", callback_data="admin_remove_premium_help"),
+        ],
+        [
+            InlineKeyboardButton("📋 Premium List", callback_data="admin_premium_list"),
+            InlineKeyboardButton("⏳ Check Expiry", callback_data="admin_check_premium_help"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def admin_broadcast_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📝 Text Guide", callback_data="admin_broadcast_help"),
+            InlineKeyboardButton("📦 Media Guide", callback_data="admin_broadcast_media_help"),
+        ],
+        [
+            InlineKeyboardButton("📊 Broadcast Stats", callback_data="admin_broadcast_stats"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def admin_task_debug_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🧪 Task Debug Help", callback_data="admin_task_debug_help"),
+            InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+# ---------- SHARED NAV ----------
 def submenu_nav(back: str = "show_settings_home"):
     return InlineKeyboardMarkup([
         [
@@ -232,8 +332,9 @@ def submenu_nav(back: str = "show_settings_home"):
     ])
 
 
+# ---------- SETTINGS SUB MENUS ----------
 def thumbnail_buttons(enabled: bool):
-    label = "✅ Thumbnail On" if enabled else "❌ Thumbnail Off"
+    label = _yes_no_label(enabled, "✅ Thumbnail On", "❌ Thumbnail Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_thumbnail_enabled")],
         [InlineKeyboardButton("📷 Set Thumbnail", callback_data="set_thumbnail_photo")],
@@ -246,7 +347,7 @@ def thumbnail_buttons(enabled: bool):
 
 
 def caption_buttons(enabled: bool):
-    label = "✅ Caption On" if enabled else "❌ Caption Off"
+    label = _yes_no_label(enabled, "✅ Caption On", "❌ Caption Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_caption_enabled")],
         [InlineKeyboardButton("✍️ Set Caption", callback_data="set_caption_text")],
@@ -260,7 +361,7 @@ def caption_buttons(enabled: bool):
 
 
 def caption_index_buttons(enabled: bool):
-    label = "✅ {index} On" if enabled else "❌ {index} Off"
+    label = _yes_no_label(enabled, "✅ {index} On", "❌ {index} Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_caption_index_enabled")],
         [InlineKeyboardButton("🔢 Set Padding", callback_data="set_caption_index_padding")],
@@ -287,7 +388,7 @@ def simple_set_buttons(set_cb: str, remove_cb: str = "", back: str = "show_setti
 
 
 def metadata_buttons(enabled: bool):
-    label = "✅ Metadata On" if enabled else "❌ Metadata Off"
+    label = _yes_no_label(enabled, "✅ Metadata On", "❌ Metadata Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_metadata_enabled")],
         [
@@ -317,7 +418,7 @@ def metadata_field_buttons(set_cb: str, remove_cb: str):
 
 
 def index_buttons(enabled: bool):
-    label = "✅ Index ON" if enabled else "❌ Index OFF"
+    label = _yes_no_label(enabled, "✅ Index ON", "❌ Index OFF")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_index_mode")],
         [InlineKeyboardButton("📊 Index Stats", callback_data="show_index_stats")],
@@ -330,7 +431,7 @@ def index_buttons(enabled: bool):
 
 
 def auto_rename_buttons(enabled: bool):
-    label = "✅ Auto Rename On" if enabled else "❌ Auto Rename Off"
+    label = _yes_no_label(enabled, "✅ Auto Rename On", "❌ Auto Rename Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_auto_rename_enabled")],
         [InlineKeyboardButton("✍️ Simple Rename", callback_data="set_auto_rename")],
@@ -349,7 +450,7 @@ def auto_rename_buttons(enabled: bool):
 
 
 def filename_index_buttons(enabled: bool):
-    label = "✅ Filename {index} On" if enabled else "❌ Filename {index} Off"
+    label = _yes_no_label(enabled, "✅ Filename {index} On", "❌ Filename {index} Off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_filename_index_enabled")],
         [InlineKeyboardButton("🔢 Set Padding", callback_data="set_filename_index_padding")],
@@ -361,6 +462,55 @@ def filename_index_buttons(enabled: bool):
     ])
 
 
+def replace_words_buttons(enabled: bool = True):
+    label = _yes_no_label(enabled, "✅ Replace Words On", "❌ Replace Words Off")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data="toggle_replace_words")],
+        [InlineKeyboardButton("✍️ Set Rules", callback_data="set_replace_words")],
+        [InlineKeyboardButton("🗑 Clear Rules", callback_data="clear_replace_words")],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def destination_buttons(has_destination: bool = False, has_topic: bool = False):
+    dest_label = "✅ Destination Set" if has_destination else "❌ Destination Not Set"
+    topic_label = "✅ Topic Set" if has_topic else "❌ Topic Not Set"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(dest_label, callback_data="show_destination")],
+        [InlineKeyboardButton("📌 Set Destination", callback_data="set_destination")],
+        [InlineKeyboardButton(topic_label, callback_data="show_topic_id")],
+        [InlineKeyboardButton("🧵 Set Topic ID", callback_data="set_topic_id")],
+        [
+            InlineKeyboardButton("🧹 Clear Topic", callback_data="clear_topic_id"),
+            InlineKeyboardButton("🗑 Clear Destination", callback_data="clear_destination"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def upload_mode_buttons(upload_mode: str = "media"):
+    current = _upload_mode_button_label(upload_mode)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Current: {current}", callback_data="noop")],
+        [
+            InlineKeyboardButton("🎞 Media", callback_data="set_upload_mode:media"),
+            InlineKeyboardButton("📄 Document", callback_data="set_upload_mode:document"),
+        ],
+        [InlineKeyboardButton("🔁 Quick Toggle", callback_data="toggle_upload_mode")],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+# ---------- LOGIN / TASKS ----------
 def login_buttons(has_session: bool = False):
     if has_session:
         return InlineKeyboardMarkup([
@@ -382,40 +532,70 @@ def login_buttons(has_session: bool = False):
     ])
 
 
-def task_buttons(task_id: str, done: bool = False):
+def task_buttons(task_id: str, done: bool = False, status: str = "", can_debug: bool = False):
     if done:
-        return InlineKeyboardMarkup([
+        rows = [
             [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
-            [InlineKeyboardButton("❌ Close", callback_data="close_settings")],
-        ])
+        ]
+        if can_debug:
+            rows.append([InlineKeyboardButton("🧪 Details", callback_data=f"task_debug:{task_id}")])
+        rows.append([InlineKeyboardButton("❌ Close", callback_data="close_settings")])
+        return InlineKeyboardMarkup(rows)
 
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("♻️ Refresh", callback_data=f"task_refresh:{task_id}")],
         [InlineKeyboardButton("🛑 Cancel", callback_data=f"task_cancel:{task_id}")],
         [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
-    ])
+    ]
+    if status:
+        rows.insert(0, [InlineKeyboardButton(_task_status_badge(status), callback_data="noop")])
+    if can_debug:
+        rows.append([InlineKeyboardButton("🧪 Details", callback_data=f"task_debug:{task_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
-def my_tasks_buttons():
-    return InlineKeyboardMarkup([
+def my_tasks_buttons(include_cleanup: bool = False):
+    rows = [
         [InlineKeyboardButton("♻️ Refresh", callback_data="show_my_tasks")],
+    ]
+    if include_cleanup:
+        rows.append([InlineKeyboardButton("🧹 Clear Finished", callback_data="clear_finished_tasks")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def task_debug_buttons(task_id: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("♻️ Refresh Task", callback_data=f"task_refresh:{task_id}")],
+        [InlineKeyboardButton("🧪 Raw Debug", callback_data=f"task_debug:{task_id}")],
+        [InlineKeyboardButton("🛑 Cancel", callback_data=f"task_cancel:{task_id}")],
         [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+            InlineKeyboardButton("⬅️ Back", callback_data="show_my_tasks"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
         ],
     ])
 
 
+# ---------- BATCH ----------
 def batch_buttons(enabled: bool, is_premium: bool = False):
-    label = "✅ Batch ON" if enabled else "❌ Batch OFF"
+    label = _yes_no_label(enabled, "✅ Batch ON", "❌ Batch OFF")
     tier = "💎 Premium Batch" if is_premium else "🆓 Free Batch"
 
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_batch_mode")],
         [InlineKeyboardButton(tier, callback_data="show_premium_info")],
         [InlineKeyboardButton("📥 Set Batch Links", callback_data="set_batch_links")],
-        [InlineKeyboardButton("▶️ Start Batch", callback_data="start_batch_now")],
-        [InlineKeyboardButton("🗑 Clear Batch", callback_data="clear_batch_links")],
+        [
+            InlineKeyboardButton("▶️ Start Batch", callback_data="start_batch_now"),
+            InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks"),
+        ],
+        [
+            InlineKeyboardButton("🗑 Clear Batch", callback_data="clear_batch_links"),
+            InlineKeyboardButton("ℹ️ Batch Info", callback_data="show_batch_info"),
+        ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),

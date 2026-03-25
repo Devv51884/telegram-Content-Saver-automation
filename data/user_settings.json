@@ -3,8 +3,8 @@
     "upload_mode": "media",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
-    "caption_enabled": true,
-    "caption_text": "{index}",
+    "caption_enabled": false,
+    "caption_text": "",
     "caption_parse_mode": "html",
     "caption_index_enabled": true,
     "caption_index_padding": 2,
@@ -29,10 +29,12 @@
     "upload_destination": "-1003496689015",
     "topic_id": "",
     "index_mode": true,
-    "authorized_mode": false,
-    "last_login_user_id": 0,
+    "authorized_mode": true,
+    "last_login_user_id": 6747712268,
     "batch_mode": true,
-    "batch_last_input": "https://t.me/Codebasics_courses_free/39-42"
+    "batch_last_input": "https://t.me/c/3256350889/2",
+    "user_id": 6747712268,
+    "updated_at": "2026-03-25T09:10:56.354100+00:00"
   },
   "6949344152": {
     "upload_mode": "Telegram",

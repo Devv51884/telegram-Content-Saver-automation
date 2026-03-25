@@ -13,9 +13,13 @@ from storage import (
 )
 
 
+APP_VERSION_LABEL = "V12"
+
+
 def _safe_text(value, fallback="None"):
     value = str(value or "").strip()
     return value if value else fallback
+
 
 
 def _upload_mode_display(value: str) -> str:
@@ -25,14 +29,62 @@ def _upload_mode_display(value: str) -> str:
     return "Media"
 
 
+
 def _premium_display(user_id: int) -> str:
     return "Premium 💎" if is_premium_user(user_id) else "Free 🆓"
 
 
+
+def _yes_no_enabled(value: bool) -> str:
+    return "Enabled ✅" if value else "Disabled ❌"
+
+
+
+def _exists_text(value) -> str:
+    return "Exists ✅" if value else "None"
+
+
+
+def _task_destination_display(task: dict) -> str:
+    if not isinstance(task, dict):
+        return "Not Set"
+
+    candidates = [
+        task.get("user_destination"),
+        task.get("destination_display"),
+        task.get("destination"),
+        task.get("destination_raw"),
+        task.get("upload_destination"),
+        task.get("target_chat"),
+        task.get("target_chat_id"),
+        task.get("destination_chat_id"),
+        task.get("target"),
+        task.get("dest"),
+    ]
+
+    for value in candidates:
+        value = str(value or "").strip()
+        if value:
+            return value
+    return "Not Set"
+
+
+
+def _task_topic_display(task: dict) -> str:
+    if not isinstance(task, dict):
+        return "None"
+    for key in ("topic_id", "message_thread_id", "thread_id"):
+        value = str(task.get(key) or "").strip()
+        if value:
+            return value
+    return "None"
+
+
+
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} V10**\n\n"
-        "Ye Code Devil ka upgraded structured bot hai.\n\n"
+        f"👋 Welcome to **{APP_NAME} {APP_VERSION_LABEL}**\n\n"
+        "Ye Code Devil ka upgraded structured bot hai jisme settings, tasks, premium flow aur batch processing ko aur stable banaya gaya hai.\n\n"
         "**Available Commands:**\n"
         "/start - Bot start karo\n"
         "/ping - Bot status check karo\n"
@@ -45,9 +97,10 @@ def start_text():
         "/logout - Saved login remove karo\n"
         "/my_tasks - Running/completed tasks dekho\n"
         "/cancel - Current input cancel karo\n\n"
-        "**New in V10:**\n"
-        "Premium-ready structure + better UI/UX + cleaner settings + improved progress system + faster public-copy workflow."
+        "**Highlights:**\n"
+        "Cleaner task destination display + stronger task schema sync + better retry-friendly wording + premium-ready settings flow."
     )
+
 
 
 def help_text():
@@ -93,8 +146,9 @@ def help_text():
         "Media mode me bot photo/video/audio ko media ki tarah bhejega.\n"
         "Document mode me bot almost sab files ko document ki tarah bhejega.\n\n"
         "**Premium**\n"
-        "Premium users ko zyada batch/task limits mil sakti hain."
+        "Premium users ko zyada batch/task limits aur future advanced tools mil sakte hain."
     )
+
 
 
 def plan_text():
@@ -110,8 +164,11 @@ def plan_text():
         "✅ V8 - Batch mode + strict force subscribe + /start index reset + range format batch links\n"
         "✅ V9 - Dynamic media/document upload mode + improved progress system + cleaner settings UI\n"
         "✅ V10 - Premium-ready system + better UI/UX + direct public copy workflow base\n"
-        "🔜 V11 - More advanced tools + database-first architecture"
+        "✅ V11 - Hybrid database support + upgraded admin panel + cleaner premium flow + stronger retry/batch experience\n"
+        "✅ V12 - Task schema sync + better destination display + more stable task text flow\n"
+        "🔜 Next - analytics + payments + plan-based advanced controls"
     )
+
 
 
 def terms_text():
@@ -125,6 +182,7 @@ def terms_text():
         "6. Premium misuse ya abuse hone par access remove kiya ja sakta hai.\n"
         "7. Code Devil community updates ke liye channels join rakho."
     )
+
 
 
 def premium_info_text(user_id: int):
@@ -144,10 +202,11 @@ def premium_info_text(user_id: int):
     )
 
 
+
 def admin_panel_text():
     return (
         "🛡 **Admin Panel**\n\n"
-        "Yahan se admin-related controls aur premium/help actions access kiye ja sakte hain.\n\n"
+        "Yahan se admin-related controls, premium management aur broadcast/help actions access kiye ja sakte hain.\n\n"
         "**Useful Commands:**\n"
         "/stats\n"
         "/users\n"
@@ -159,6 +218,7 @@ def admin_panel_text():
         "/remove_premium user_id\n"
         "/premium_status user_id"
     )
+
 
 
 def admin_premium_help_text():
@@ -173,6 +233,7 @@ def admin_premium_help_text():
     )
 
 
+
 def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
     login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
@@ -183,25 +244,26 @@ def settings_home_text(user_id: int):
         f"⚙️ **Settings for User**\n\n"
         f"Plan: **{_premium_display(user_id)}**\n"
         f"Upload Mode: **{upload_mode}**\n"
-        f"Custom Thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
-        f"Caption: **{'Enabled' if s.get('caption_enabled') else 'Disabled'}**\n"
+        f"Custom Thumbnail: **{_exists_text(s.get('thumbnail_file_id'))}**\n"
+        f"Caption: **{'Enabled ✅' if s.get('caption_enabled') else 'Disabled ❌'}**\n"
         f"Prefix: **{_safe_text(s.get('prefix'))}**\n"
         f"Suffix: **{_safe_text(s.get('suffix'))}**\n"
         f"Auto Rename: **{_safe_text(s.get('auto_rename'))}**\n"
         f"Rename Template: **{_safe_text(s.get('rename_template'))}**\n"
         f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**\n"
         f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**\n"
-        f"Metadata: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n"
+        f"Metadata: **{'Enabled ✅' if s.get('metadata_enabled') else 'Disabled ❌'}**\n"
         f"Upload Destination: **{_safe_text(s.get('upload_destination'))}**\n"
         f"Topic ID: **{_safe_text(s.get('topic_id'))}**\n"
         f"Replace Words: **{_safe_text(s.get('replace_words'))}**\n"
-        f"Index Mode: **{'Enabled' if is_index_mode(user_id) else 'Disabled'}**\n"
+        f"Index Mode: **{_yes_no_enabled(is_index_mode(user_id))}**\n"
         f"Batch Mode: **{batch_status}**\n"
         f"Authorized Login: **{login_status}**\n"
         f"Batch Limit: **{get_user_batch_limit(user_id)}**\n"
         f"Task Limit: **{get_user_task_limit(user_id)}**\n\n"
         "Niche buttons se sab setting manage kar sakte ho."
     )
+
 
 
 def upload_mode_text(user_id: int = 0):
@@ -220,15 +282,17 @@ def upload_mode_text(user_id: int = 0):
     )
 
 
+
 def thumbnail_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "🖼 **Thumbnail Setting**\n\n"
-        f"Current thumbnail: **{'Exists' if s.get('thumbnail_file_id') else 'None'}**\n"
-        f"Thumbnail status: **{'Enabled' if s.get('thumbnail_enabled') else 'Disabled'}**\n\n"
+        f"Current thumbnail: **{_exists_text(s.get('thumbnail_file_id'))}**\n"
+        f"Thumbnail status: **{'Enabled ✅' if s.get('thumbnail_enabled') else 'Disabled ❌'}**\n\n"
         "Send a photo to save it as custom thumbnail.\n"
         "Timeout: 60 sec"
     )
+
 
 
 def caption_text(user_id: int):
@@ -265,6 +329,7 @@ def caption_text(user_id: int):
     )
 
 
+
 def prefix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -279,6 +344,7 @@ def prefix_text(user_id: int):
     )
 
 
+
 def suffix_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -291,6 +357,7 @@ def suffix_text(user_id: int):
         f"Current suffix: **{_safe_text(s.get('suffix'))}**\n\n"
         "Send Suffix. Timeout: 60 sec"
     )
+
 
 
 def auto_rename_text(user_id: int):
@@ -318,6 +385,7 @@ def auto_rename_text(user_id: int):
     )
 
 
+
 def destination_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -331,6 +399,7 @@ def destination_text(user_id: int):
     )
 
 
+
 def topic_id_text(user_id: int):
     s = get_user_settings(user_id)
     return (
@@ -339,6 +408,7 @@ def topic_id_text(user_id: int):
         f"Current topic id: **{_safe_text(s.get('topic_id'))}**\n\n"
         "Send Topic ID. Timeout: 60 sec"
     )
+
 
 
 def replace_words_text(user_id: int):
@@ -355,16 +425,18 @@ def replace_words_text(user_id: int):
     )
 
 
+
 def metadata_home_text(user_id: int):
     s = get_user_settings(user_id)
     return (
         "📦 **Metadata Setting**\n\n"
-        f"Metadata status: **{'Enabled' if s.get('metadata_enabled') else 'Disabled'}**\n\n"
+        f"Metadata status: **{'Enabled ✅' if s.get('metadata_enabled') else 'Disabled ❌'}**\n\n"
         f"Video Title: **{_safe_text(s.get('metadata_video_title'))}**\n"
         f"Video Author: **{_safe_text(s.get('metadata_video_author'))}**\n"
         f"Audio Title: **{_safe_text(s.get('metadata_audio_title'))}**\n"
-        f"Subtitle Title: **{_safe_text(s.get('metadata_subtitle_title'))}**\n"
+        f"Subtitle Title: **{_safe_text(s.get('metadata_subtitle_title'))}**"
     )
+
 
 
 def metadata_field_text(user_id: int, label: str, key: str):
@@ -376,12 +448,13 @@ def metadata_field_text(user_id: int, label: str, key: str):
     )
 
 
+
 def batch_text(user_id: int):
     s = get_user_settings(user_id)
     current = s.get("batch_last_input") or "None"
     return (
         "📦 **Batch Mode Setting**\n\n"
-        f"Batch mode: **{'Enabled' if is_batch_mode(user_id) else 'Disabled'}**\n"
+        f"Batch mode: **{'Enabled ✅' if is_batch_mode(user_id) else 'Disabled ❌'}**\n"
         f"Current tier: **{_premium_display(user_id)}**\n"
         f"Your batch limit: **{get_user_batch_limit(user_id)}**\n\n"
         "Batch ON hone par multiple Telegram links ek saath process kar sakte ho.\n\n"
@@ -402,6 +475,7 @@ def batch_text(user_id: int):
     )
 
 
+
 def unknown_text():
     return (
         "🤖 Mujhe ye commands bhejo:\n\n"
@@ -419,6 +493,7 @@ def unknown_text():
     )
 
 
+
 def index_started_text(user_id: int):
     return (
         "🧠 **Index Mode On**\n\n"
@@ -429,11 +504,13 @@ def index_started_text(user_id: int):
     )
 
 
+
 def index_stopped_text(user_id: int):
     return (
         "🛑 **Index Mode Off**\n\n"
         "Auto indexing band kar di gayi hai."
     )
+
 
 
 def index_stats_text(user_id: int):
@@ -442,6 +519,7 @@ def index_stats_text(user_id: int):
         f"Your indexed items: **{get_index_user_count(user_id)}**\n"
         f"Total indexed items: **{index_count()}**"
     )
+
 
 
 def index_info_text(user_id: int):
@@ -460,6 +538,7 @@ def index_info_text(user_id: int):
     )
 
 
+
 def login_intro_text():
     return (
         "🔐 **Login System**\n\n"
@@ -473,6 +552,7 @@ def login_intro_text():
     )
 
 
+
 def ask_phone_text():
     return (
         "📱 **Phone Number Bhejo**\n\n"
@@ -480,6 +560,7 @@ def ask_phone_text():
         "`+919876543210`\n\n"
         "Telegram account ka number international format me bhejo."
     )
+
 
 
 def ask_code_text():
@@ -492,12 +573,14 @@ def ask_code_text():
     )
 
 
+
 def ask_password_text():
     return (
         "🔒 **2-Step Password Bhejo**\n\n"
         "Tumhare Telegram account par cloud password enabled hai.\n"
         "Apna password bhejo."
     )
+
 
 
 def login_success_text(phone: str = ""):
@@ -510,12 +593,14 @@ def login_success_text(phone: str = ""):
     )
 
 
+
 def login_failed_text(error: str):
     return (
         "❌ **Login Failed**\n\n"
         f"Error:\n`{error}`\n\n"
         "Dobara /login try karo."
     )
+
 
 
 def login_status_text(user_id: int):
@@ -534,11 +619,13 @@ def login_status_text(user_id: int):
     )
 
 
+
 def logout_success_text():
     return (
         "🚪 **Logout Successful**\n\n"
         "Saved session remove kar di gayi hai."
     )
+
 
 
 def logout_missing_text():
@@ -548,43 +635,70 @@ def logout_missing_text():
     )
 
 
+
 def task_running_text(task: dict):
     status = task.get("status", "unknown")
     source = task.get("source", "unknown")
     progress = task.get("progress_text", "")
-    destination = task.get("destination", "Not Set")
+    destination = _task_destination_display(task)
+    retries = _task_retries(task)
+    topic_id = _task_topic_display(task)
+    upload_mode = _upload_mode_display(task.get("upload_mode", "media"))
 
     text = (
         f"⚡ **Task Running**\n\n"
         f"**Status:** {status}\n"
         f"**Source:** `{source}`\n"
-        f"**Destination:** `{destination}`"
+        f"**Destination:** `{destination}`\n"
+        f"**Topic ID:** `{topic_id}`\n"
+        f"**Mode:** `{upload_mode}`"
     )
 
     if progress:
         text += f"\n**Progress:** {progress}"
+    if retries is not None:
+        text += f"\n**Retries:** {retries}"
 
     return text
 
 
+
 def task_completed_text(task: dict):
     progress = task.get("progress_text", "")
+    destination = _task_destination_display(task)
+    topic_id = _task_topic_display(task)
+    delivered_to = task.get("delivered_to") or []
+    delivered_text = ", ".join(delivered_to) if delivered_to else destination
     text = (
         "✅ **Task Completed**\n\n"
         f"**Source:** `{task.get('source', 'unknown')}`\n"
-        f"**Destination:** `{task.get('destination', 'Not Set')}`"
+        f"**Delivered To:** `{delivered_text}`\n"
+        f"**Topic ID:** `{topic_id}`"
     )
     if progress:
         text += f"\n**Result:** {progress}"
     return text
 
 
+
+def _task_retries(task: dict):
+    return task.get("retries", task.get("retry_count", 0))
+
+
 def task_failed_text(task: dict):
+    retry_note = ""
+    destination = _task_destination_display(task)
+    retries = _task_retries(task)
+    if retries is not None:
+        retry_note = f"\n**Retries Used:** `{retries}`"
     return (
         "❌ **Task Failed**\n\n"
         f"**Source:** `{task.get('source', 'unknown')}`\n"
+        f"**Destination:** `{destination}`\n"
         f"**Error:** `{task.get('error', 'Unknown error')}`"
+        f"{retry_note}"
     )
+
 
 
 def my_tasks_text(tasks: list):
@@ -596,9 +710,13 @@ def my_tasks_text(tasks: list):
 
     lines = ["📂 **My Tasks**\n"]
     for i, task in enumerate(tasks[:10], start=1):
+        status = task.get("status", "unknown")
+        source = task.get("source", "unknown")
+        destination = _task_destination_display(task)
         lines.append(
-            f"{i}. **{task.get('status', 'unknown')}** | "
-            f"`{task.get('source', 'unknown')}`"
+            f"{i}. **{status}**\n"
+            f"   **Source:** `{source}`\n"
+            f"   **Destination:** `{destination}`"
         )
 
     return "\n".join(lines)

@@ -1,32 +1,64 @@
+from __future__ import annotations
+
 import threading
+import time
+import traceback
+
 from pyrogram import idle
 
-from bot import app
 from app import run_web, set_runtime_state
+from bot import app, ensure_background_workers_started
+
+
+BOT_STARTUP_MODE = "web+bot"
 
 
 def start_bot():
-    print("🤖 Starting Code Devil Bot...")
-    app.start()
+    print("🤖 Starting Code Devil Bot V12 Complete Fix ")
+    set_runtime_state(False, username="unknown", mode=BOT_STARTUP_MODE)
 
-    me = app.get_me()
-    username = me.username if me else "unknown"
+    try:
+        app.start()
+        app.loop.run_until_complete(ensure_background_workers_started(app))
 
-    print(f"✅ Bot Started as @{username}")
-    set_runtime_state(True, username)
+        me = app.get_me()
+        username = me.username if me else "unknown"
 
-    idle()
-    app.stop()
+        print(f"✅ Bot Started as @{username}")
+        set_runtime_state(True, username=username, mode=BOT_STARTUP_MODE)
+
+        idle()
+    except KeyboardInterrupt:
+        print("⏹ Bot shutdown requested by keyboard interrupt.")
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        print("❌ Bot startup/runtime error:")
+        traceback.print_exc()
+        set_runtime_state(False, error=err, mode=BOT_STARTUP_MODE)
+        raise
+    finally:
+        try:
+            app.stop()
+            print("🛑 Bot stopped.")
+        except Exception:
+            pass
+        set_runtime_state(False, mode=BOT_STARTUP_MODE)
 
 
 def start_web():
-    run_web()
+    try:
+        run_web()
+    except Exception:
+        print("❌ Web server failed to start:")
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Code Devil Restricted Saver V10...")
+    print("🚀 Starting Code Devil Restricted Saver V12 Complete Fix...")
 
-    web_thread = threading.Thread(target=start_web, daemon=True)
+    web_thread = threading.Thread(target=start_web, daemon=True, name="web-server")
     web_thread.start()
 
+    time.sleep(0.8)
     start_bot()

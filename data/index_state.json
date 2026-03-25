@@ -1,9 +1,10 @@
 {
   "6747712268": {
     "enabled": true,
-    "count": 27,
-    "user_current_index": 3,
-    "last_reset_at": "2026-03-24T07:43:46.791406"
+    "count": 48,
+    "user_start_offset": 0,
+    "user_current_index": 2,
+    "last_reset_at": "2026-03-25T09:03:59.348083"
   },
   "7465924968": {
     "enabled": false,
