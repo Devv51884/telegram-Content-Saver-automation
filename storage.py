@@ -215,7 +215,7 @@ def _parse_iso(value):
         return None
 
 
-_ACTIVE_TASK_STATUSES = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating"}
+_ACTIVE_TASK_STATUSES = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating", "checking"}
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
 _TASK_STATUS_TTL = max(5, _to_int(TASK_STATUS_TTL_MINUTES, 180))
 
@@ -532,8 +532,13 @@ def _normalize_task_record(task_id: str, data=None):
     )
 
     status = str(data.get("status", "queued") or "queued").strip().lower()
-    if status in {"running", "in_progress"}:
-        status = "processing"
+    aliases = {
+        "running": "processing",
+        "in_progress": "processing",
+        "waiting": "queued",
+        "checking": "checking",
+    }
+    status = aliases.get(status, status)
 
     progress = max(0.0, min(100.0, _to_float(data.get("progress", 0.0), 0.0)))
     retries = max(0, _to_int(data.get("retries", data.get("retry_count", 0)), 0))
@@ -579,6 +584,8 @@ def _normalize_task_record(task_id: str, data=None):
         "status_message_id": _to_int(data.get("status_message_id", 0), 0),
         "checking_chat_id": _to_int(data.get("checking_chat_id", 0), 0),
         "checking_message_id": _to_int(data.get("checking_message_id", 0), 0),
+        "pinned_ui": _to_bool(data.get("pinned_ui", False), False),
+        "is_visible": _to_bool(data.get("is_visible", False), False),
         "last_ui_update": _to_float(data.get("last_ui_update", 0.0), 0.0),
         "delivered_to": data.get("delivered_to", []),
         "delivery_errors": data.get("delivery_errors", []),
@@ -1444,15 +1451,16 @@ def get_all_tasks():
 
     def _rank(status: str) -> int:
         order = {
-            "queued": 1,
-            "processing": 2,
-            "fetching": 3,
-            "downloading": 4,
-            "uploading": 5,
-            "copying": 6,
-            "completed": 7,
-            "failed": 7,
-            "cancelled": 7,
+            "checking": 1,
+            "queued": 2,
+            "processing": 3,
+            "fetching": 4,
+            "downloading": 5,
+            "uploading": 6,
+            "copying": 7,
+            "completed": 8,
+            "failed": 8,
+            "cancelled": 8,
         }
         return order.get(str(status or "").lower(), 0)
 
@@ -1464,6 +1472,7 @@ def get_all_tasks():
                 task_id = str(row.get("id", "") or "")
                 if task_id:
                     remote[task_id] = _normalize_task_record(task_id, row)
+
             if ENABLE_LOCAL_FALLBACK:
                 merged = dict(normalized_local)
                 for task_id, remote_task in remote.items():
@@ -1471,19 +1480,27 @@ def get_all_tasks():
                     if not local_task:
                         merged[task_id] = remote_task
                         continue
+
                     local_dt = _parse_iso(local_task.get("updated_at") or local_task.get("created_at"))
                     remote_dt = _parse_iso(remote_task.get("updated_at") or remote_task.get("created_at"))
+
                     if local_dt and remote_dt:
-                        merged[task_id] = remote_task if remote_dt > local_dt else local_task
+                        if remote_dt > local_dt:
+                            merged[task_id] = remote_task
+                        else:
+                            merged[task_id] = local_task
                     elif _rank(remote_task.get("status")) > _rank(local_task.get("status")):
                         merged[task_id] = remote_task
                     else:
                         merged[task_id] = local_task
+
                 _save_local_map(TASKS_FILE, merged)
                 return merged
+
             return remote
         except Exception:
             pass
+
     return normalized_local
 
 

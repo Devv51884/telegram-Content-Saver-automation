@@ -41,13 +41,14 @@ def _yes_no_label(enabled: bool, on_text: str, off_text: str) -> str:
 
 
 def _task_status_badge(status: str) -> str:
-    value = str(status or "queued").strip().lower()
+    value = str(status or "checking").strip().lower()
     mapping = {
-        "queued": "🕒 Queued",
-        "validating": "🔎 Validating",
-        "fetching": "📥 Fetching",
+        "checking": "🔎 Checking",
+        "queued": "🔎 Checking",
+        "validating": "🔎 Checking",
+        "fetching": "🔎 Checking",
+        "processing": "🔎 Checking",
         "downloading": "📥 Downloading",
-        "processing": "⚙️ Processing",
         "uploading": "📤 Uploading",
         "copying": "🚀 Copying",
         "completed": "✅ Completed",
@@ -55,9 +56,6 @@ def _task_status_badge(status: str) -> str:
         "cancelled": "🛑 Cancelled",
     }
     return mapping.get(value, f"ℹ️ {value.title()}")
-
-
-# ---------- START / ACCESS ----------
 def join_required_buttons():
     join_url = _safe_url(JOIN_LINK or MAIN_CHANNEL, "https://t.me/")
     return InlineKeyboardMarkup([
@@ -542,16 +540,19 @@ def task_buttons(task_id: str, done: bool = False, status: str = "", can_debug: 
         rows.append([InlineKeyboardButton("❌ Close", callback_data="close_settings")])
         return InlineKeyboardMarkup(rows)
 
-    rows = [
-        [InlineKeyboardButton("♻️ Refresh", callback_data=f"task_refresh:{task_id}")],
-        [InlineKeyboardButton("🛑 Cancel", callback_data=f"task_cancel:{task_id}")],
+    rows = []
+    if status:
+        rows.append([InlineKeyboardButton(_task_status_badge(status), callback_data="noop")])
+    rows.extend([
+        [
+            InlineKeyboardButton("♻️ Refresh", callback_data=f"task_refresh:{task_id}"),
+            InlineKeyboardButton("🛑 Cancel", callback_data=f"task_cancel:{task_id}"),
+        ],
         [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
-    ]
+    ])
     if can_debug:
         rows.append([InlineKeyboardButton("🧪 Details", callback_data=f"task_debug:{task_id}")])
     return InlineKeyboardMarkup(rows)
-
-
 def my_tasks_buttons(include_cleanup: bool = False):
     rows = [
         [InlineKeyboardButton("♻️ Refresh", callback_data="show_my_tasks")],
@@ -598,4 +599,22 @@ def batch_buttons(enabled: bool, is_premium: bool = False):
             InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
         ],
+    ])
+
+
+def batch_live_board_buttons(batch_key: str, current_task_id: str = "", done: bool = False):
+    cancel_cb = f"task_cancel:{current_task_id}" if current_task_id else "noop"
+    if done:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
+            [InlineKeyboardButton("❌ Close", callback_data=f"batch_close:{batch_key}")],
+        ])
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("♻️ Refresh", callback_data=f"batch_refresh:{batch_key}"),
+            InlineKeyboardButton("🛑 Cancel Current", callback_data=cancel_cb),
+        ],
+        [InlineKeyboardButton("📂 My Tasks", callback_data="show_my_tasks")],
+        [InlineKeyboardButton("❌ Close", callback_data=f"batch_close:{batch_key}")],
     ])

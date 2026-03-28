@@ -130,8 +130,8 @@ def help_text():
         "   https://t.me/channel/25\n"
         "   https://t.me/channel/26\n\n"
         "3. Range format:\n"
-        "   https://t.me/Codebasics_courses_free/39-69\n"
-        "   https://t.me/c/2102477197/340-360\n\n"
+        "   https://t.me/Code_Devil/39-69\n"
+        "   https://t.me/c/2102477857/340-360\n\n"
         "4. Space separated links bhi bhej sakte ho.\n\n"
         "**Upload Mode**\n"
         "Media mode me bot photo/video/audio ko media ki tarah bhejega.\n"
@@ -180,7 +180,7 @@ def premium_info_text(user_id: int):
     task_limit = get_user_task_limit(user_id)
 
     return (
-        "💎 **Premium Info**\n\n"
+        " **Premium Info**\n\n"
         f"Current Plan: **{status}**\n"
         f"Plan Name: **{DEFAULT_PREMIUM_PLAN_NAME if is_premium_user(user_id) else 'Free'}**\n"
         f"Expiry: **{expiry}**\n"
@@ -583,21 +583,127 @@ def logout_success_text():
 def logout_missing_text():
     return "⚠️ **Logout**\n\nAbhi koi saved session mila hi nahi."
 
+
 def checking_text(link_text: str = ""):
     link_text = str(link_text or "").strip()
     if link_text:
         return (
             "🔎 **Checking Link...**\n\n"
             f"**Source:** `{link_text}`\n"
-            "Please wait, bot source access aur task readiness verify kar raha hai."
+            "_Please wait... bot source access aur task readiness verify kar raha hai._"
         )
-    return "🔎 **Checking Link...**\n\nPlease wait, bot source access aur task readiness verify kar raha hai."
+    return "🔎 **Checking Link...**\n\n_Please wait... bot source access aur task readiness verify kar raha hai._"
 
+
+def batch_live_board_text(board: dict):
+    board = dict(board or {})
+    total = int(board.get("total") or 0)
+    running = int(board.get("running") or 0)
+    completed = int(board.get("completed") or 0)
+    failed = int(board.get("failed") or 0)
+    current_index = int(board.get("current_index") or 0)
+    current_source = str(board.get("current_source") or "").strip()
+    current_stage = str(board.get("current_stage") or "").strip() or "Checking"
+    current_task_id = str(board.get("current_task_id") or "").strip()
+    progress_bar_text = str(board.get("progress_bar_text") or "").strip()
+    progress_percent = board.get("progress_percent")
+    processed = str(board.get("processed_text") or "").strip()
+    speed = str(board.get("speed_text") or "").strip()
+    eta = str(board.get("eta_text") or "").strip()
+    elapsed = str(board.get("elapsed_text") or "").strip()
+    status = str(board.get("status") or "Running").strip()
+
+    lines = [
+        "📌 **Batch Processing**",
+        "",
+        f"**Status:** `{status}`",
+        f"**Progress:** `{completed + failed}/{total}` | **Running:** `{running}` | **Failed:** `{failed}`",
+    ]
+    if current_index:
+        lines.append(f"**Current Link:** `{current_index}/{max(total, current_index)}`")
+    if current_task_id:
+        lines.append(f"**Task ID:** `{current_task_id}`")
+    if current_stage:
+        lines.append(f"**Stage:** `{current_stage}`")
+    if current_source:
+        lines.append(f"**Source:** `{current_source}`")
+    if progress_bar_text:
+        try:
+            lines.append(f"**Transfer:** `{progress_bar_text}` **{float(progress_percent or 0):.2f}%**")
+        except Exception:
+            lines.append(f"**Transfer:** `{progress_bar_text}`")
+    if processed:
+        lines.append(f"**Processed:** `{processed}`")
+    if speed:
+        lines.append(f"**Speed:** `{speed}`")
+    if eta:
+        lines.append(f"**ETA:** `{eta}`")
+    if elapsed:
+        lines.append(f"**Elapsed:** `{elapsed}`")
+    return "\n".join(lines)
+
+
+def batch_completed_board_text(board: dict):
+    board = dict(board or {})
+    batch_name = str(board.get("batch_name") or "Batch Job").strip()
+    total = int(board.get("total") or 0)
+    completed = int(board.get("completed") or 0)
+    failed = int(board.get("failed") or 0)
+    elapsed = str(board.get("elapsed_text") or "").strip()
+
+    lines = [
+        "𝗝𝗼𝗯 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲𝗱",
+        "",
+        f"𝗕𝗮𝘁𝗰𝗵 𝗡𝗮𝗺𝗲 » {batch_name}",
+        f"𝗩𝗮𝗹𝗶𝗱 𝗟𝗶𝗻𝗸𝘀 » {total}",
+        f"𝗦𝘂𝗰𝗰𝗲𝘀𝘀 » {completed}",
+        f"𝗙𝗮𝗶𝗹𝗲𝗱 » {failed}",
+    ]
+    if elapsed:
+        lines.append(f"𝗘𝗹𝗮𝗽𝘀𝗲𝗱 » {elapsed}")
+    lines.extend([
+        "",
+        "𝘙𝘦𝘱𝘰𝘳𝘵 𝘵𝘰 𝘉𝘖𝘛 𝘈𝘥𝘮𝘪𝘯 𝘧𝘰𝘳 𝘧𝘢𝘪𝘭𝘦𝘥 𝘭𝘪𝘯𝘬𝘴 𝘪𝘧 𝘢𝘯𝘺.",
+    ])
+    return "\n".join(lines)
+def auto_index_completed_text(payload: dict):
+    payload = dict(payload or {})
+    batch_name = str(payload.get("batch_name") or "Single Link Job").strip()
+    valid_links = int(payload.get("valid_links") or 1)
+    success = int(payload.get("success") or 1)
+    failed = int(payload.get("failed") or 0)
+    destination = str(payload.get("destination") or "Not Set").strip()
+    index_no = payload.get("index_no")
+    user_index_no = payload.get("user_index_no")
+    link_type = str(payload.get("link_type") or "unknown").strip()
+
+    lines = [
+        "𝗝𝗼𝗯 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲𝗱",
+        "",
+        f"𝗕𝗮𝘁𝗰𝗵 𝗡𝗮𝗺𝗲 » {batch_name}",
+        f"𝗩𝗮𝗹𝗶𝗱 𝗟𝗶𝗻𝗸𝘀 » {valid_links}",
+        f"𝗦𝘂𝗰𝗰𝗲𝘀𝘀 » {success}",
+        f"𝗙𝗮𝗶𝗹𝗲𝗱 » {failed}",
+    ]
+    if index_no not in (None, "", 0):
+        lines.append(f"𝗚𝗹𝗼𝗯𝗮𝗹 𝗜𝗻𝗱𝗲𝘅 » {index_no}")
+    if user_index_no not in (None, "", 0):
+        lines.append(f"𝗨𝘀𝗲𝗿 𝗜𝗻𝗱𝗲𝘅 » {user_index_no}")
+    if destination:
+        lines.append(f"𝗗𝗲𝘀𝘁𝗶𝗻𝗮𝘁𝗶𝗼𝗻 » {destination}")
+    if link_type:
+        lines.append(f"𝗟𝗶𝗻𝗸 𝗧𝘆𝗽𝗲 » {link_type}")
+    lines.extend([
+        "",
+        "𝘙𝘦𝘱𝘰𝘳𝘵 𝘵𝘰 𝘉𝘖𝘛 𝘈𝘥𝘮𝘪𝘯 𝘧𝘰𝘳 𝘧𝘢𝘪𝘭𝘦𝘥 𝘭𝘪𝘯𝘬𝘴 𝘪𝘧 𝘢𝘯𝘺.",
+    ])
+    return "\n".join(lines)
 
 
 def _stage_label(task: dict) -> str:
-    stage = str(task.get("current_stage") or task.get("status") or "processing").strip().lower()
+    stage = str(task.get("current_stage") or task.get("status") or "checking").strip().lower()
     labels = {
+        "checking": "Checking",
         "queued": "Checking",
         "processing": "Checking",
         "fetching": "Checking",
@@ -661,13 +767,13 @@ def _user_destination_display(task: dict) -> str:
 
 
 def task_running_text(task: dict):
-    status = str(task.get("status", "unknown"))
     stage = _stage_label(task)
     source = task.get("source", "unknown")
     destination = _user_destination_display(task)
     retries = task.get("retry_count", task.get("retries"))
     topic_id = _task_topic_display(task)
     upload_mode = _upload_mode_display(task.get("upload_mode", "media"))
+    task_id = str(task.get("id") or task.get("task_id") or "").strip()
 
     progress_bar_text = str(task.get("progress_bar_text") or "").strip()
     progress_percent = task.get("progress_percent", task.get("progress"))
@@ -677,44 +783,44 @@ def task_running_text(task: dict):
     eta_seconds = task.get("eta_seconds", 0)
     elapsed_seconds = task.get("elapsed_seconds", 0)
 
-    card = [
-        "✨ **Task Processing**",
-        "",
+    lines = ["✨ **Task Processing**", ""]
+    if task_id:
+        lines.append(f"**Task ID:** `{task_id}`")
+    lines.extend([
         f"**Stage:** `{stage}`",
         f"**Source:** `{source}`",
         f"**Destination:** `{destination}`",
-    ]
+    ])
 
     if str(topic_id).strip() and str(topic_id).strip().lower() != "none":
-        card.append(f"**Topic ID:** `{topic_id}`")
-    card.append(f"**Mode:** `{upload_mode}`")
+        lines.append(f"**Topic ID:** `{topic_id}`")
+    lines.append(f"**Mode:** `{upload_mode}`")
 
-    if progress_bar_text and progress_percent not in (None, ""):
-        try:
-            card.append(f"**Progress:** `{progress_bar_text}` **{float(progress_percent):.2f}%**")
-        except Exception:
-            card.append(f"**Progress:** `{progress_bar_text}`")
-    elif progress_percent not in (None, "") and str(stage).lower() not in {"checking"}:
-        try:
-            card.append(f"**Progress:** **{float(progress_percent):.2f}%**")
-        except Exception:
-            pass
+    if str(stage).lower() not in {"checking"}:
+        if progress_bar_text and progress_percent not in (None, ""):
+            try:
+                lines.append(f"**Transfer:** `{progress_bar_text}` **{float(progress_percent):.2f}%**")
+            except Exception:
+                lines.append(f"**Transfer:** `{progress_bar_text}`")
+        elif progress_percent not in (None, ""):
+            try:
+                lines.append(f"**Transfer:** **{float(progress_percent):.2f}%**")
+            except Exception:
+                pass
+        if total_bytes:
+            lines.append(f"**Processed:** `{_fmt_bytes(current_bytes)}` / `{_fmt_bytes(total_bytes)}`")
+        elif current_bytes:
+            lines.append(f"**Processed:** `{_fmt_bytes(current_bytes)}`")
+        if speed_bps:
+            lines.append(f"**Speed:** `{_fmt_speed(speed_bps)}`")
+        if eta_seconds:
+            lines.append(f"**ETA:** `{_fmt_eta(eta_seconds)}`")
+        if elapsed_seconds:
+            lines.append(f"**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`")
 
-    if total_bytes:
-        card.append(f"**Processed:** `{_fmt_bytes(current_bytes)}` / `{_fmt_bytes(total_bytes)}`")
-    elif current_bytes and str(stage).lower() not in {"checking"}:
-        card.append(f"**Processed:** `{_fmt_bytes(current_bytes)}`")
-
-    if speed_bps:
-        card.append(f"**Speed:** `{_fmt_speed(speed_bps)}`")
-    if eta_seconds:
-        card.append(f"**ETA:** `{_fmt_eta(eta_seconds)}`")
-    if elapsed_seconds:
-        card.append(f"**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`")
     if retries not in (None, "", 0):
-        card.append(f"**Retries:** `{retries}`")
-
-    return "\n".join(card)
+        lines.append(f"**Retries:** `{retries}`")
+    return "\n".join(lines)
 
 
 def task_completed_text(task: dict):
@@ -722,35 +828,42 @@ def task_completed_text(task: dict):
     destination = _user_destination_display(task)
     topic_id = _task_topic_display(task)
     elapsed_seconds = task.get("elapsed_seconds", 0)
+    task_id = str(task.get("id") or task.get("task_id") or "").strip()
 
-    text = (
-        "✅ **Task Completed**\n\n"
-        f"**Source:** `{task.get('source', 'unknown')}`\n"
-        f"**Destination:** `{destination}`\n"
-        f"**Topic ID:** `{topic_id}`"
-    )
+    lines = ["✅ **Task Completed**", ""]
+    if task_id:
+        lines.append(f"**Task ID:** `{task_id}`")
+    lines.extend([
+        f"**Source:** `{task.get('source', 'unknown')}`",
+        f"**Destination:** `{destination}`",
+    ])
+    if str(topic_id).strip() and str(topic_id).strip().lower() != "none":
+        lines.append(f"**Topic ID:** `{topic_id}`")
     if elapsed_seconds:
-        text += f"\n**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`"
+        lines.append(f"**Elapsed:** `{_fmt_elapsed(elapsed_seconds)}`")
     if progress:
-        text += f"\n**Result:** `{progress}`"
-    return text
+        lines.append(f"**Result:** `{progress}`")
+    return "\n".join(lines)
 
 
 def task_failed_text(task: dict):
     destination = _user_destination_display(task)
     retries = task.get("retry_count", task.get("retries"))
     stage = _stage_label(task)
+    task_id = str(task.get("id") or task.get("task_id") or "").strip()
 
-    text = (
-        "❌ **Task Failed**\n\n"
-        f"**Stage:** `{stage}`\n"
-        f"**Source:** `{task.get('source', 'unknown')}`\n"
-        f"**Destination:** `{destination}`\n"
-        f"**Error:** `{task.get('error', 'Unknown error')}`"
-    )
-    if retries is not None:
-        text += f"\n**Retries Used:** `{retries}`"
-    return text
+    lines = ["❌ **Task Failed**", ""]
+    if task_id:
+        lines.append(f"**Task ID:** `{task_id}`")
+    lines.extend([
+        f"**Stage:** `{stage}`",
+        f"**Source:** `{task.get('source', 'unknown')}`",
+        f"**Destination:** `{destination}`",
+        f"**Error:** `{task.get('error', 'Unknown error')}`",
+    ])
+    if retries not in (None, "", 0):
+        lines.append(f"**Retries Used:** `{retries}`")
+    return "\n".join(lines)
 
 
 def my_tasks_text(tasks: list):
@@ -759,20 +872,22 @@ def my_tasks_text(tasks: list):
 
     lines = ["📂 **My Tasks**\n"]
     for i, task in enumerate(tasks[:10], start=1):
-        status = task.get("status", "unknown")
+        stage = _stage_label(task)
         source = task.get("source", "unknown")
         destination = _user_destination_display(task)
-        progress_percent = task.get("progress_percent", task.get("progress"))
-        stage = _stage_label(task)
-        progress_note = ""
-        if progress_percent not in (None, "") and status not in {"completed", "failed", "cancelled"}:
+        percent = task.get("progress_percent", task.get("progress"))
+        task_id = str(task.get("id") or task.get("task_id") or "").strip()
+        suffix = ""
+
+        if percent not in (None, "") and str(stage).lower() not in {"completed", "failed", "cancelled", "checking"}:
             try:
-                progress_note = f" | {float(progress_percent):.1f}%"
+                suffix = f" | {float(percent):.1f}%"
             except Exception:
-                progress_note = ""
+                suffix = ""
 
         lines.append(
-            f"{i}. **{stage}**{progress_note}\n"
+            f"{i}. **{stage}**{suffix}\n"
+            f"   **Task ID:** `{task_id or '-'}`\n"
             f"   **Source:** `{source}`\n"
             f"   **Destination:** `{destination}`"
         )

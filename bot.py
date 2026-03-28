@@ -54,6 +54,7 @@ from keyboards import (
     auto_rename_buttons,
     filename_index_buttons,
     batch_buttons,
+    batch_live_board_buttons,
     admin_panel_buttons,
     premium_info_buttons,
 )
@@ -95,6 +96,9 @@ from texts import (
     task_completed_text,
     task_failed_text,
     my_tasks_text,
+    batch_live_board_text,
+    batch_completed_board_text,
+    auto_index_completed_text,
     premium_info_text,
     admin_panel_text,
     admin_premium_help_text,
@@ -473,6 +477,37 @@ def progress_bar(percent: float, length: int = 10) -> str:
     return "█" * filled + "░" * (length - filled)
 
 
+def derive_batch_name(raw_text: str, links: list[str] | None = None) -> str:
+    raw_text = str(raw_text or "").strip()
+    links = links or []
+    for line in raw_text.splitlines():
+        value = str(line or "").strip()
+        if not value:
+            continue
+        if not value.startswith("http://") and not value.startswith("https://"):
+            return value[:80]
+    if links:
+        first = str(links[0]).strip()
+        if "/c/" in first:
+            return "Private Channel Batch"
+        return "Telegram Batch Job"
+    return "Batch Job"
+
+
+async def try_direct_forward_with_user_client(user_client, source_msg, target, settings: dict):
+    topic_id = safe_topic_id(settings.get("topic_id", ""))
+    try:
+        return await user_client.forward_messages(
+            chat_id=target,
+            from_chat_id=source_msg.chat.id,
+            message_ids=source_msg.id,
+            message_thread_id=topic_id if topic_id else None,
+            drop_author=False,
+        )
+    except Exception:
+        return None
+
+
 def build_settings_home_markup(user_id: int):
     marks = get_settings_marks(user_id)
     has_session = has_user_session(user_id)
@@ -496,6 +531,252 @@ def build_start_markup(user_id: int):
 
 def build_upload_mode_message(user_id: int):
     return upload_mode_text(user_id)
+
+
+def _task_stage_label_for_batch(task: dict) -> str:
+    stage = str((task or {}).get("current_stage") or (task or {}).get("status") or "checking").strip().lower()
+    mapping = {
+        "checking": "Checking",
+        "queued": "Checking",
+        "processing": "Checking",
+        "fetching": "Checking",
+        "downloading": "Downloading",
+        "uploading": "Uploading",
+        "copying": "Copying",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+    }
+    return mapping.get(stage, stage.title())
+
+
+def _get_batch_board(user_id: int) -> dict:
+    board = get_login_temp(user_id, "batch_board", {})
+    return board if isinstance(board, dict) else {}
+
+
+def _save_batch_board(user_id: int, board: dict):
+    set_login_temp(user_id, "batch_board", dict(board or {}))
+
+
+def _clear_batch_board(user_id: int):
+    clear_login_temp(user_id, "batch_board")
+
+
+def _batch_counts_from_tasks(board: dict):
+    tasks = board.get("tasks", {}) if isinstance(board.get("tasks", {}), dict) else {}
+    queued = running = completed = failed = 0
+    for row in tasks.values():
+        status = str((row or {}).get("status") or "").strip().lower()
+        if status == "completed":
+            completed += 1
+        elif status in {"failed", "cancelled"}:
+            failed += 1
+        elif status in {"downloading", "uploading", "copying"}:
+            running += 1
+        else:
+            queued += 1
+    return queued, running, completed, failed
+
+
+async def _try_pin_message(client, chat_id, message_id):
+    try:
+        await client.pin_chat_message(chat_id, message_id, disable_notification=True)
+        return True
+    except Exception:
+        return False
+
+
+async def _try_unpin_message(client, chat_id, message_id):
+    try:
+        await client.unpin_chat_message(chat_id, message_id)
+        return True
+    except Exception:
+        return False
+
+
+def _elapsed_for_batch(board: dict) -> str:
+    started = float(board.get("started_ts", 0) or 0)
+    if not started:
+        return ""
+    return human_eta(max(0, time.time() - started))
+
+
+async def _open_batch_board(client, message, user_id: int, total: int, note: str = "", batch_name: str = "Batch Job"):
+    batch_key = uuid.uuid4().hex[:10]
+    board = {
+        "batch_key": batch_key,
+        "user_id": user_id,
+        "status": "Preparing",
+        "total": int(total or 0),
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "failed": 0,
+        "current_index": 0,
+        "current_source": "",
+        "current_stage": "",
+        "progress_percent": 0.0,
+        "progress_bar_text": "",
+        "processed_text": "",
+        "speed_text": "",
+        "eta_text": "",
+        "elapsed_text": "",
+        "note": str(note or ""),
+        "tasks": {},
+        "started_ts": time.time(),
+        "done": False,
+        "chat_id": 0,
+        "message_id": 0,
+        "pinned": False,
+        "current_task_id": "",
+        "batch_name": str(batch_name or "Batch Job"),
+    }
+    sent = await message.reply_text(
+        batch_live_board_text(board),
+        reply_markup=batch_live_board_buttons(batch_key, done=False, current_task_id=str(board.get("current_task_id", "") or "")),
+        disable_web_page_preview=True,
+    )
+    board["chat_id"] = sent.chat.id
+    board["message_id"] = sent.id
+    board["pinned"] = await _try_pin_message(client, sent.chat.id, sent.id)
+    _save_batch_board(user_id, board)
+    return board
+
+
+async def _refresh_batch_board_message(client, user_id: int, force_done: bool = False):
+    board = _get_batch_board(user_id)
+    if not board:
+        return
+    chat_id = board.get("chat_id")
+    message_id = board.get("message_id")
+    batch_key = board.get("batch_key", "")
+    if not chat_id or not message_id:
+        return
+
+    queued, running, completed, failed = _batch_counts_from_tasks(board)
+    board["queued"] = queued
+    board["running"] = running
+    board["completed"] = completed
+    board["failed"] = failed
+    board["elapsed_text"] = _elapsed_for_batch(board)
+
+    done = force_done or (completed + failed >= int(board.get("total") or 0) and int(board.get("total") or 0) > 0)
+    board["done"] = bool(done)
+    if done:
+        board["status"] = "Completed"
+        board["current_stage"] = "Completed"
+        board["current_task_id"] = ""
+        text = batch_completed_board_text(board)
+        markup = batch_live_board_buttons(batch_key, done=True, current_task_id=str(board.get("current_task_id", "") or ""))
+    else:
+        text = batch_live_board_text(board)
+        markup = batch_live_board_buttons(batch_key, done=False, current_task_id=str(board.get("current_task_id", "") or ""))
+
+    try:
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        pass
+
+    if done and board.get("pinned"):
+        await _try_unpin_message(client, chat_id, message_id)
+        board["pinned"] = False
+
+    _save_batch_board(user_id, board)
+
+
+def _register_task_to_batch_board(user_id: int, task_id: str, batch_key: str, batch_index: int, batch_total: int, source: str):
+    board = _get_batch_board(user_id)
+    if not board or board.get("batch_key") != batch_key:
+        return
+    tasks = board.get("tasks", {}) if isinstance(board.get("tasks", {}), dict) else {}
+    tasks[str(task_id)] = {
+        "index": int(batch_index or 0),
+        "source": str(source or ""),
+        "status": "checking",
+    }
+    board["tasks"] = tasks
+    board["total"] = max(int(board.get("total") or 0), int(batch_total or 0))
+    board["current_index"] = int(batch_index or 0)
+    board["current_source"] = str(source or "")
+    board["current_stage"] = "Checking"
+    board["status"] = "Running"
+    board["current_task_id"] = str(task_id)
+    _save_batch_board(user_id, board)
+
+
+async def _sync_batch_board_from_task(client, task: dict):
+    if not isinstance(task, dict):
+        return
+    if str(task.get("mode", "")).strip().lower() != "batch":
+        return
+
+    user_id = int(task.get("user_id") or 0)
+    batch_key = str(task.get("batch_key") or "").strip()
+    if not user_id or not batch_key:
+        return
+
+    board = _get_batch_board(user_id)
+    if not board or board.get("batch_key") != batch_key:
+        return
+
+    tasks = board.get("tasks", {}) if isinstance(board.get("tasks", {}), dict) else {}
+    task_id = str(task.get("id") or "")
+    item = tasks.get(task_id, {})
+    item.update({
+        "index": int(task.get("batch_index") or item.get("index") or 0),
+        "source": str(task.get("source") or item.get("source") or ""),
+        "status": str(task.get("status") or "checking").strip().lower(),
+    })
+    tasks[task_id] = item
+    board["tasks"] = tasks
+    board["status"] = "Running"
+    board["current_index"] = int(item.get("index") or 0)
+    board["current_source"] = str(item.get("source") or "")
+    board["current_stage"] = _task_stage_label_for_batch(task)
+    board["current_task_id"] = task_id
+    board["progress_bar_text"] = str(task.get("progress_bar_text") or "")
+    board["progress_percent"] = task.get("progress_percent", task.get("progress", 0.0))
+    if task.get("total_bytes"):
+        board["processed_text"] = f"{human_bytes(task.get('current_bytes', 0))} / {human_bytes(task.get('total_bytes', 0))}"
+    elif task.get("current_bytes"):
+        board["processed_text"] = human_bytes(task.get("current_bytes", 0))
+    else:
+        board["processed_text"] = ""
+    board["speed_text"] = human_speed(task.get("speed_bps", 0)) if task.get("speed_bps") else ""
+    board["eta_text"] = human_eta(task.get("eta_seconds", 0)) if task.get("eta_seconds") else ""
+    board["elapsed_text"] = _elapsed_for_batch(board)
+
+    if task.get("status") == "completed":
+        board["note"] = f"Last done: item {board['current_index']}"
+    elif task.get("status") in {"failed", "cancelled"}:
+        board["note"] = f"Last failed: item {board['current_index']}"
+
+    _save_batch_board(user_id, board)
+    await _refresh_batch_board_message(client, user_id)
+
+
+async def _close_batch_board(client, user_id: int):
+    board = _get_batch_board(user_id)
+    if not board:
+        return
+    chat_id = board.get("chat_id")
+    message_id = board.get("message_id")
+    if board.get("pinned") and chat_id and message_id:
+        await _try_unpin_message(client, chat_id, message_id)
+    try:
+        if chat_id and message_id:
+            await client.delete_messages(chat_id, message_id)
+    except Exception:
+        pass
+    _clear_batch_board(user_id)
+
 
 
 def debug_log(msg: str):
@@ -564,6 +845,8 @@ async def ensure_task_card_visible(client, task_id: str):
             "status_message_id": checking_message_id,
             "checking_chat_id": 0,
             "checking_message_id": 0,
+            "pinned_ui": True,
+            "is_visible": True,
         })
         return True
     except Exception as e:
@@ -580,7 +863,7 @@ def should_show_processing_card(task: dict) -> bool:
 
 async def ask_login_for_private_link(message, info_message=None):
     text = (
-        "🔐 Private channel link detect hui hai."
+        "🔐 Private channel link detect hui hai.\n\n"
         "Is content ko save karne ke liye pehle /login karke apna Telegram account authorize karo."
     )
     await edit_or_reply(message, text, info_message)
@@ -588,7 +871,7 @@ async def ask_login_for_private_link(message, info_message=None):
 
 async def ask_set_destination(message, info_message=None):
     text = (
-        "📍 Pehle apna destination set karo."
+        "📍 Pehle apna destination set karo.\n\n"
         "/settings → Destination me chat id ya @channelusername set karo, tabhi content save hoga."
     )
     await edit_or_reply(message, text, info_message)
@@ -631,11 +914,12 @@ async def task_worker(client, worker_id: int):
                 "progress_text": "",
                 "queue_position": 0,
                 "worker_id": worker_id,
+                "is_visible": False,
             })
             await update_task_status_message(client, task_id, done=False)
             await _run_task_attempts(client, item)
         except Exception as e:
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"Worker crash: {e}"})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"Worker crash: {e}", "is_visible": True})
             await update_task_status_message(client, task_id, done=True)
             debug_log(f"Worker-{worker_id} crashed on {task_id}: {e}")
         finally:
@@ -664,9 +948,10 @@ async def _run_task_attempts(client, item: dict):
             return True
 
         except FloodWait as e:
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"FloodWait: wait {e.value}s"})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"FloodWait: wait {e.value}s", "is_visible": True})
             await update_task_status_message(client, task_id, done=True)
-            await message.reply_text(f"❌ FloodWait: {e.value}s wait karo.")
+            if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
+                await message.reply_text(f"❌ FloodWait: {e.value}s wait karo.")
             return False
 
         except Exception as e:
@@ -675,9 +960,10 @@ async def _run_task_attempts(client, item: dict):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
 
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": str(e)})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": str(e), "is_visible": True})
             await update_task_status_message(client, task_id, done=True)
-            await message.reply_text(f"❌ Task failed:\n{e}")
+            if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
+                await message.reply_text(f"❌ Task failed:\n{e}")
             return False
 
     return False
@@ -704,8 +990,10 @@ async def update_task_status_message(client, task_id: str, done: bool = False):
     task = get_task(task_id)
     if not task:
         return
+    if str(task.get("mode", "")).strip().lower() == "batch":
+        await _sync_batch_board_from_task(client, task)
+        return
 
-    # Keep queued/fetching/processing hidden behind the checking card
     if not done and not should_show_processing_card(task):
         await update_checking_message(client, task_id)
         return
@@ -748,7 +1036,12 @@ async def create_task_status_message(message, task_id: str, checking_message=Non
         return
 
     if checking_message:
-        touch_task(task_id, {"checking_chat_id": checking_message.chat.id, "checking_message_id": checking_message.id})
+        touch_task(task_id, {
+            "checking_chat_id": checking_message.chat.id,
+            "checking_message_id": checking_message.id,
+            "pinned_ui": True,
+            "is_visible": False,
+        })
         await update_checking_message(message._client, task_id)
         return
 
@@ -756,7 +1049,12 @@ async def create_task_status_message(message, task_id: str, checking_message=Non
         checking_text(task.get("source", "")),
         disable_web_page_preview=True,
     )
-    touch_task(task_id, {"checking_chat_id": sent.chat.id, "checking_message_id": sent.id})
+    touch_task(task_id, {
+        "checking_chat_id": sent.chat.id,
+        "checking_message_id": sent.id,
+        "pinned_ui": True,
+        "is_visible": False,
+    })
 
 
 async def throttled_progress_update(client, task_id: str):
@@ -812,6 +1110,7 @@ async def progress_callback(current, total, client, task_id: str, stage: str):
         "eta_seconds": float(eta or 0.0),
         "elapsed_seconds": float(elapsed or 0.0),
         "progress_text": " • ".join(compact_parts),
+        "is_visible": True,
     })
     await throttled_progress_update(client, task_id)
 
@@ -1188,7 +1487,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
     download_path = None
 
     try:
-        touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": ""})
+        touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": "", "is_visible": False})
         await update_task_status_message(client, task_id)
 
         ensure_task_not_cancelled(task_id)
@@ -1203,20 +1502,80 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
         user_index_no = get_next_user_index(user_id) - 1 or 1
 
         direct_copy_allowed = can_direct_copy(source_msg, settings, fetch_mode=fetch_mode)
+        direct_forward_allowed = bool(
+            fetch_mode == "user"
+            and is_media_message(source_msg)
+            and getattr(cfg, "ALLOW_FORWARD_AS_FALLBACK", True)
+            and not settings.get("thumbnail_enabled")
+            and not (settings.get("caption_enabled") and settings.get("caption_text"))
+            and not settings.get("prefix")
+            and not settings.get("suffix")
+            and not settings.get("replace_words")
+            and not settings.get("auto_rename_enabled")
+            and not settings.get("rename_template")
+            and not settings.get("auto_rename")
+            and not settings.get("filename_prefix")
+            and not settings.get("filename_suffix")
+            and not settings.get("filename_index_enabled")
+            and not settings.get("metadata_enabled")
+        )
 
         if not is_media_message(source_msg):
             if is_media_like_message(source_msg):
                 raise RuntimeError("Source post media-like hai but media object resolve nahi hua. Authorized login se dubara try karo.")
-            touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
+            touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
             await update_task_status_message(client, task_id)
             delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
         else:
             if direct_copy_allowed:
-                touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct copy path", "is_visible": True})
                 await update_task_status_message(client, task_id)
                 delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
+            elif direct_forward_allowed and user_client:
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct forward path", "is_visible": True})
+                await update_task_status_message(client, task_id)
+
+                targets = []
+                if destination:
+                    targets.append(destination)
+                if LOG_CHANNEL and str(LOG_CHANNEL) != str(destination):
+                    targets.append(LOG_CHANNEL)
+
+                delivered_to, delivery_errors = [], []
+                for target in targets:
+                    result = await try_direct_forward_with_user_client(user_client, source_msg, target, settings)
+                    if result:
+                        delivered_to.append(str(target))
+                    else:
+                        delivery_errors.append(f"{target}: direct forward not allowed")
+
+                if not delivered_to:
+                    touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download path", "is_visible": True})
+                    await update_task_status_message(client, task_id)
+
+                    download_path = get_temp_download_path(source_msg)
+                    source_client = user_client if user_client else client
+
+                    await source_client.download_media(
+                        source_msg,
+                        file_name=download_path,
+                        progress=progress_callback,
+                        progress_args=(client, task_id, "downloading"),
+                    )
+
+                    if not download_path or not os.path.exists(download_path):
+                        raise RuntimeError("Download complete hone ke baad file temp me nahi mili.")
+
+                    download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
+
+                    touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
+                    await update_task_status_message(client, task_id)
+
+                    delivered_to, delivery_errors = await deliver_to_destinations(
+                        client, task_id, source_msg, settings, destination, download_path, index_no=user_index_no
+                    )
             else:
-                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": ""})
+                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
                 download_path = get_temp_download_path(source_msg)
@@ -1234,7 +1593,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
 
                 download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
 
-                touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": ""})
+                touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
                 delivered_to, delivery_errors = await deliver_to_destinations(
@@ -1248,6 +1607,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
         touch_task(task_id, {
             "status": "completed",
             "current_stage": "completed",
+            "is_visible": True,
             "index_id": idx_no,
             "user_index_no": user_index_no,
             "progress_text": result_note,
@@ -1258,17 +1618,23 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
         await update_task_status_message(client, task_id, done=True)
 
         user_destination_text = str(destination or settings.get("upload_destination") or "Not Set")
-        await message.reply_text(
-            f"⚡ **Auto Link Process Done**\n\n"
-            f"📚 Global Index No: **{idx_no}**\n"
-            f"🔢 User Index No: **{user_index_no}**\n"
-            f"📦 Type: **{entry['content_type']}**\n"
-            f"📊 Your Total Indexed: **{user_count_now}**\n"
-            f"📍 Destination: **{user_destination_text}**\n"
-            f"🔗 Link Type: **{entry['link_type'] or 'unknown'}**"
-        )
+        is_batch_task = str((get_task(task_id) or {}).get("mode", "")).strip().lower() == "batch"
+        if not is_batch_task:
+            await message.reply_text(
+                auto_index_completed_text({
+                    "batch_name": entry.get("file_name") or entry.get("content_type") or "Single Link Job",
+                    "valid_links": 1,
+                    "success": 1,
+                    "failed": 0,
+                    "destination": user_destination_text,
+                    "index_no": idx_no,
+                    "user_index_no": user_index_no,
+                    "link_type": entry.get("link_type") or "unknown",
+                }),
+                disable_web_page_preview=True,
+            )
 
-        if delivery_errors:
+        if delivery_errors and not is_batch_task:
             await message.reply_text("⚠️ Kuch targets par send fail hua:\n" + "\n".join(delivery_errors[:5]))
 
     finally:
@@ -1284,7 +1650,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
                 pass
 
 
-async def process_link_task(client, user_id: int, message, link_text: str, batch_mode: bool = False):
+async def process_link_task(client, user_id: int, message, link_text: str, batch_mode: bool = False, batch_key: str = "", batch_index: int = 0, batch_total: int = 0):
     await ensure_background_workers_started(client)
 
     info = extract_telegram_link_info(link_text)
@@ -1292,19 +1658,24 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
     destination = normalize_target(settings.get("upload_destination", "")) or DEFAULT_DESTINATION or None
 
     checking_message = None
-    try:
-        checking_message = await message.reply_text(
-            checking_text(link_text.strip()),
-            disable_web_page_preview=True,
-        )
-    except Exception:
-        checking_message = None
+    if not batch_mode:
+        try:
+            checking_message = await message.reply_text(
+                checking_text(link_text.strip()),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            checking_message = None
 
     if not destination:
+        if batch_mode:
+            return False
         await ask_set_destination(message, checking_message)
         return False
 
     if info and info.get("link_type") == "private" and not has_user_session(user_id):
+        if batch_mode:
+            return False
         await ask_login_for_private_link(message, checking_message)
         return False
 
@@ -1314,25 +1685,17 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
     queue_now = TASK_QUEUE.qsize()
 
     if running_now >= user_task_limit:
+        if batch_mode:
+            return False
         warn = f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain."
-        try:
-            if checking_message:
-                await checking_message.edit_text(warn)
-            else:
-                await message.reply_text(warn)
-        except Exception:
-            await message.reply_text(warn)
+        await edit_or_reply(message, warn, checking_message)
         return False
 
     if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
+        if batch_mode:
+            return False
         warn = "⚠️ Queue full hai. Thodi der baad try karo."
-        try:
-            if checking_message:
-                await checking_message.edit_text(warn)
-            else:
-                await message.reply_text(warn)
-        except Exception:
-            await message.reply_text(warn)
+        await edit_or_reply(message, warn, checking_message)
         return False
 
     task_id = make_task_id()
@@ -1344,8 +1707,8 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         "source": link_text.strip(),
         "destination": str(destination or ""),
         "user_destination": str(destination or ""),
-        "status": "queued",
-        "current_stage": "queued",
+        "status": "checking",
+        "current_stage": "checking",
         "progress": 0.0,
         "progress_percent": 0.0,
         "progress_text": "",
@@ -1360,7 +1723,18 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         "status_message_id": 0,
         "checking_chat_id": 0,
         "checking_message_id": 0,
+        "pinned_ui": not batch_mode,
+        "is_visible": False,
+        "batch_key": str(batch_key or ""),
+        "batch_index": int(batch_index or 0),
+        "batch_total": int(batch_total or 0),
     })
+
+    if batch_mode:
+        _register_task_to_batch_board(user_id, task_id, batch_key, batch_index, batch_total, link_text.strip())
+        await _refresh_batch_board_message(client, user_id)
+        return task_id
+
     await create_task_status_message(message, task_id, checking_message=checking_message)
 
     await TASK_QUEUE.put({
@@ -1373,7 +1747,7 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         "batch_mode": batch_mode,
     })
     debug_log(f"Queued task {task_id} for user {user_id}")
-    return True
+    return task_id
 
 
 async def process_batch_links(client, user_id: int, message, raw_text: str):
@@ -1384,39 +1758,74 @@ async def process_batch_links(client, user_id: int, message, raw_text: str):
 
     save_batch_input(user_id, raw_text)
     user_batch_limit = min(get_user_batch_limit(user_id), MAX_BATCH_LINKS)
-    original_total = len(links)
-
     if len(links) > user_batch_limit:
         links = links[:user_batch_limit]
-        await message.reply_text(
-            f"⚠️ Batch links limit exceed ho gayi thi.\nSirf first **{user_batch_limit}** links process honge."
-        )
 
-    await message.reply_text(
-        f"📦 Batch start ho raha hai.\n\n"
-        f"Total found: **{original_total}**\n"
-        f"Processing: **{len(links)}**"
-    )
+    board = await _open_batch_board(client, message, user_id, len(links), note="", batch_name=derive_batch_name(raw_text, links))
+    batch_key = board.get("batch_key", "")
 
     success = 0
     failed = 0
 
     for idx, link in enumerate(links, start=1):
-        status_msg = await message.reply_text(f"▶️ Batch item **{idx}/{len(links)}**\n`{link}`")
-        result = await process_link_task(client, user_id, status_msg, link, batch_mode=True)
-        if result:
+        task_id = await process_link_task(
+            client,
+            user_id,
+            message,
+            link,
+            batch_mode=True,
+            batch_key=batch_key,
+            batch_index=idx,
+            batch_total=len(links),
+        )
+
+        if not task_id:
+            failed += 1
+            await _refresh_batch_board_message(client, user_id, force_done=(idx == len(links) and success == 0))
+            continue
+
+        item = {
+            "task_id": task_id,
+            "user_id": user_id,
+            "message": message,
+            "link_text": link,
+            "settings": get_user_settings(user_id),
+            "destination": normalize_target(get_user_settings(user_id).get("upload_destination", "")) or DEFAULT_DESTINATION or None,
+            "batch_mode": True,
+        }
+
+        touch_task(task_id, {
+            "status": "processing",
+            "current_stage": "processing",
+            "progress_text": "",
+            "queue_position": 0,
+            "worker_id": 0,
+            "is_visible": False,
+        })
+        await update_task_status_message(client, task_id, done=False)
+
+        ok = await _run_task_attempts(client, item)
+        if ok:
             success += 1
         else:
             failed += 1
+
+        board = _get_batch_board(user_id)
+        if board:
+            board["current_index"] = idx
+            board["current_task_id"] = ""
+            _save_batch_board(user_id, board)
+            await _refresh_batch_board_message(client, user_id, force_done=(idx == len(links)))
+
         if BATCH_DELAY > 0 and idx < len(links):
             await asyncio.sleep(BATCH_DELAY)
 
-    await message.reply_text(
-        f"✅ **Batch Enqueued**\n\n"
-        f"Queued: **{success}**\n"
-        f"Rejected: **{failed}**\n"
-        f"Total selected: **{len(links)}**"
-    )
+    board = _get_batch_board(user_id)
+    if board:
+        board["status"] = "Completed"
+        board["current_task_id"] = ""
+        _save_batch_board(user_id, board)
+        await _refresh_batch_board_message(client, user_id, force_done=True)
 
 
 async def start_login_client(user_id: int):
@@ -1675,6 +2084,27 @@ async def all_callbacks(client, callback_query):
 
     if data == "noop":
         await callback_query.answer()
+        return
+
+    if data.startswith("batch_refresh:"):
+        await _refresh_batch_board_message(client, user_id)
+        await callback_query.answer("♻️ Refreshed")
+        return
+
+    if data.startswith("batch_close:"):
+        await _close_batch_board(client, user_id)
+        await callback_query.answer("Closed")
+        return
+
+    if data.startswith("batch_cancel_current:"):
+        board = _get_batch_board(user_id)
+        current_task_id = str((board or {}).get("current_task_id") or "").strip()
+        if current_task_id:
+            touch_task(current_task_id, {"status": "cancelled", "current_stage": "cancelled", "error": "Cancelled by user"})
+            await _refresh_batch_board_message(client, user_id)
+            await callback_query.answer(f"Cancelled {current_task_id}")
+        else:
+            await callback_query.answer("No running task", show_alert=True)
         return
 
     if data == "clear_finished_tasks":

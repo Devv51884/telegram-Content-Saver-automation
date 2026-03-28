@@ -11,3 +11,6 @@ psutil
 # Supabase (DB)
 supabase
 postgrest
+
+setuptools
+wheel

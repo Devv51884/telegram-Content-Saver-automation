@@ -1,1 +1,46 @@
-{}
+{
+  "6747712268": {
+    "user_id": 6747712268,
+    "state": "",
+    "login_phone": "",
+    "login_code": "",
+    "login_password": "",
+    "phone": "",
+    "phone_code_hash": "",
+    "last_updated_at": "2026-03-28T09:42:07.024591+00:00",
+    "batch_board": {
+      "batch_key": "c4b91692f3",
+      "user_id": 6747712268,
+      "status": "Running",
+      "total": 1,
+      "queued": 0,
+      "running": 1,
+      "completed": 0,
+      "failed": 0,
+      "current_index": 1,
+      "current_source": "https://t.me/c/2121019606/269",
+      "current_stage": "Uploading",
+      "progress_percent": 94.72,
+      "progress_bar_text": "█████████░",
+      "processed_text": "43.00 MB / 45.40 MB",
+      "speed_text": "75.85 KB/s",
+      "eta_text": "32s",
+      "elapsed_text": "16m 38s",
+      "note": "",
+      "tasks": {
+        "04ad8f77c221": {
+          "index": 1,
+          "source": "https://t.me/c/2121019606/269",
+          "status": "uploading"
+        }
+      },
+      "started_ts": 1774689928.1986022,
+      "done": false,
+      "chat_id": 6747712268,
+      "message_id": 762,
+      "pinned": false,
+      "current_task_id": "04ad8f77c221",
+      "batch_name": "Private Channel Batch"
+    }
+  }
+}
