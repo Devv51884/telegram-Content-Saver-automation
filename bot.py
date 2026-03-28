@@ -31,6 +31,9 @@ from config import (
     MAX_BATCH_LINKS,
     BATCH_DELAY,
     DEFAULT_DESTINATION,
+    ENABLE_DIRECT_PUBLIC_COPY,
+    ENABLE_DIRECT_PRIVATE_COPY,
+    ENABLE_LOG_FROM_DESTINATION,
     AUTO_RETRY_FAILED_TASKS,
     MAX_RETRY_ATTEMPTS,
     RETRY_DELAY_SECONDS,
@@ -477,6 +480,24 @@ def progress_bar(percent: float, length: int = 10) -> str:
     return "█" * filled + "░" * (length - filled)
 
 
+def has_transforming_settings(settings: dict) -> bool:
+    settings = settings or {}
+    return bool(
+        settings.get("thumbnail_enabled")
+        or (settings.get("caption_enabled") and settings.get("caption_text"))
+        or settings.get("prefix")
+        or settings.get("suffix")
+        or settings.get("replace_words")
+        or settings.get("auto_rename_enabled")
+        or settings.get("rename_template")
+        or settings.get("auto_rename")
+        or settings.get("filename_prefix")
+        or settings.get("filename_suffix")
+        or settings.get("filename_index_enabled")
+        or settings.get("metadata_enabled")
+    )
+
+
 def derive_batch_name(raw_text: str, links: list[str] | None = None) -> str:
     raw_text = str(raw_text or "").strip()
     links = links or []
@@ -496,6 +517,18 @@ def derive_batch_name(raw_text: str, links: list[str] | None = None) -> str:
 
 async def try_direct_forward_with_user_client(user_client, source_msg, target, settings: dict):
     topic_id = safe_topic_id(settings.get("topic_id", ""))
+    try:
+        result = await user_client.copy_message(
+            chat_id=target,
+            from_chat_id=source_msg.chat.id,
+            message_id=source_msg.id,
+            message_thread_id=topic_id if topic_id else None,
+        )
+        if result:
+            return result
+    except Exception:
+        pass
+
     try:
         return await user_client.forward_messages(
             chat_id=target,
@@ -863,7 +896,7 @@ def should_show_processing_card(task: dict) -> bool:
 
 async def ask_login_for_private_link(message, info_message=None):
     text = (
-        "🔐 Private channel link detect hui hai.\n\n"
+        "🔐 Private channel/group link detect hui hai.\n\n"
         "Is content ko save karne ke liye pehle /login karke apna Telegram account authorize karo."
     )
     await edit_or_reply(message, text, info_message)
@@ -1145,9 +1178,11 @@ def extract_telegram_link_info(text: str):
     if not text:
         return None
 
-    text = text.strip()
-    private_match = re.search(r"https?://t\.me/c/(\d+)/(\d+)", text)
-    public_match = re.search(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)", text)
+    text = str(text).strip()
+    text = text.split("?", 1)[0].split("#", 1)[0]
+
+    private_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)", text)
+    public_match = re.search(r"https?://(?:t|telegram)\.me/([A-Za-z0-9_]+)/(\d+)", text)
 
     if private_match:
         raw_chat_id = private_match.group(1)
@@ -1246,21 +1281,29 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
 
 
 def can_direct_copy(source_msg, settings: dict, fetch_mode: str = "bot") -> bool:
-    if fetch_mode != "bot":
+    if not is_media_message(source_msg):
         return False
-    if settings.get("thumbnail_enabled"):
+    if has_transforming_settings(settings):
         return False
-    if settings.get("caption_enabled") and settings.get("caption_text"):
+    if fetch_mode == "bot":
+        return bool(ENABLE_DIRECT_PUBLIC_COPY and cfg.PREFER_COPY_OVER_DOWNLOAD)
+    if fetch_mode == "user":
+        return bool(ENABLE_DIRECT_PRIVATE_COPY and cfg.ALLOW_FORWARD_AS_FALLBACK)
+    return False
+
+
+
+def should_force_download_for_source(info: dict | None, source_msg, settings: dict, fetch_mode: str = "bot") -> bool:
+    if not is_media_message(source_msg):
         return False
-    if settings.get("prefix") or settings.get("suffix") or settings.get("replace_words"):
-        return False
-    if settings.get("auto_rename_enabled") or settings.get("rename_template") or settings.get("auto_rename"):
-        return False
-    if settings.get("filename_prefix") or settings.get("filename_suffix") or settings.get("filename_index_enabled"):
-        return False
-    if settings.get("metadata_enabled"):
-        return False
-    return is_media_message(source_msg)
+    if has_transforming_settings(settings):
+        return True
+
+    link_type = str((info or {}).get("link_type") or "").strip().lower()
+    if link_type == "private":
+        return True
+
+    return False
 
 
 async def try_direct_copy(client, source_msg, target, settings: dict):
@@ -1310,6 +1353,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                 chat_id=target,
                 document=file_path,
                 caption=caption if caption else None,
+                parse_mode="HTML",
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1324,6 +1368,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                 chat_id=target,
                 photo=file_path,
                 caption=caption if caption else None,
+                parse_mode="HTML",
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
                 progress_args=(client, task_id, "uploading"),
@@ -1337,6 +1382,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                 chat_id=target,
                 video=file_path,
                 caption=caption if caption else None,
+                parse_mode="HTML",
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1351,6 +1397,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                 chat_id=target,
                 audio=file_path,
                 caption=caption if caption else None,
+                parse_mode="HTML",
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1365,6 +1412,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                 chat_id=target,
                 voice=file_path,
                 caption=caption if caption else None,
+                parse_mode="HTML",
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
                 progress_args=(client, task_id, "uploading"),
@@ -1399,6 +1447,7 @@ async def send_text_to_target(client, target, source_msg, settings: dict, index_
     result = await client.send_message(
         chat_id=target,
         text=final_text,
+        parse_mode="HTML",
         message_thread_id=topic_id if topic_id else None,
         disable_web_page_preview=True,
     )
@@ -1445,6 +1494,64 @@ def build_index_entry(user_id: int, source_msg, link_text: str, info):
     }
 
 
+async def copy_result_to_log_channel(client, delivered_message, settings: dict):
+    if not LOG_CHANNEL or not delivered_message:
+        return None
+    try:
+        topic_id = safe_topic_id(settings.get("topic_id", ""))
+        return await client.copy_message(
+            chat_id=LOG_CHANNEL,
+            from_chat_id=delivered_message.chat.id,
+            message_id=delivered_message.id,
+            message_thread_id=topic_id if topic_id else None,
+        )
+    except Exception:
+        return None
+
+
+async def deliver_primary_then_log(client, task_id: str, source_msg, settings: dict, destination, download_path=None, index_no: int = 0):
+    if not destination and not LOG_CHANNEL:
+        raise RuntimeError("No destination configured. Destination aur log channel dono blank hain.")
+
+    delivered_to = []
+    delivery_errors = []
+    primary_result = None
+
+    if destination:
+        try:
+            primary_result = await deliver_one_target(client, task_id, source_msg, settings, destination, download_path, index_no=index_no)
+            if primary_result:
+                delivered_to.append(str(destination))
+            else:
+                delivery_errors.append(f"{destination}: send returned empty response")
+        except Exception as e:
+            delivery_errors.append(f"{destination}: {e}")
+
+    if LOG_CHANNEL:
+        if destination and str(LOG_CHANNEL) == str(destination):
+            pass
+        elif primary_result and ENABLE_LOG_FROM_DESTINATION:
+            copied = await copy_result_to_log_channel(client, primary_result, settings)
+            if copied:
+                delivered_to.append(str(LOG_CHANNEL))
+            else:
+                delivery_errors.append(f"{LOG_CHANNEL}: copy from destination failed")
+        else:
+            try:
+                log_result = await deliver_one_target(client, task_id, source_msg, settings, LOG_CHANNEL, download_path, index_no=index_no)
+                if log_result:
+                    delivered_to.append(str(LOG_CHANNEL))
+                else:
+                    delivery_errors.append(f"{LOG_CHANNEL}: send returned empty response")
+            except Exception as e:
+                delivery_errors.append(f"{LOG_CHANNEL}: {e}")
+
+    if not delivered_to:
+        raise RuntimeError("Delivery failed: " + " | ".join(delivery_errors))
+
+    return delivered_to, delivery_errors
+
+
 async def deliver_one_target(client, task_id: str, source_msg, settings: dict, target, download_path=None, index_no: int = 0):
     if download_path:
         return await upload_file_to_target(client, task_id, target, download_path, source_msg, settings, index_no=index_no)
@@ -1454,32 +1561,15 @@ async def deliver_one_target(client, task_id: str, source_msg, settings: dict, t
 
 
 async def deliver_to_destinations(client, task_id: str, source_msg, settings: dict, destination, download_path=None, index_no: int = 0):
-    targets = []
-    if destination:
-        targets.append(destination)
-    if LOG_CHANNEL and str(LOG_CHANNEL) != str(destination):
-        targets.append(LOG_CHANNEL)
-
-    if not targets:
-        raise RuntimeError("No destination configured. Destination aur log channel dono blank hain.")
-
-    delivered_to = []
-    delivery_errors = []
-
-    for target in targets:
-        try:
-            result = await deliver_one_target(client, task_id, source_msg, settings, target, download_path, index_no=index_no)
-            if result:
-                delivered_to.append(str(target))
-            else:
-                delivery_errors.append(f"{target}: send returned empty response")
-        except Exception as e:
-            delivery_errors.append(f"{target}: {e}")
-
-    if not delivered_to:
-        raise RuntimeError("Delivery failed: " + " | ".join(delivery_errors))
-
-    return delivered_to, delivery_errors
+    return await deliver_primary_then_log(
+        client,
+        task_id,
+        source_msg,
+        settings,
+        destination,
+        download_path=download_path,
+        index_no=index_no,
+    )
 
 
 async def _perform_transfer(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
@@ -1501,23 +1591,18 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
         user_count_now = increase_index_user_count(user_id)
         user_index_no = get_next_user_index(user_id) - 1 or 1
 
-        direct_copy_allowed = can_direct_copy(source_msg, settings, fetch_mode=fetch_mode)
+        force_download_flow = should_force_download_for_source(info, source_msg, settings, fetch_mode=fetch_mode)
+
+        direct_copy_allowed = bool(
+            not force_download_flow
+            and can_direct_copy(source_msg, settings, fetch_mode=fetch_mode)
+        )
         direct_forward_allowed = bool(
-            fetch_mode == "user"
+            not force_download_flow
+            and fetch_mode == "user"
             and is_media_message(source_msg)
-            and getattr(cfg, "ALLOW_FORWARD_AS_FALLBACK", True)
-            and not settings.get("thumbnail_enabled")
-            and not (settings.get("caption_enabled") and settings.get("caption_text"))
-            and not settings.get("prefix")
-            and not settings.get("suffix")
-            and not settings.get("replace_words")
-            and not settings.get("auto_rename_enabled")
-            and not settings.get("rename_template")
-            and not settings.get("auto_rename")
-            and not settings.get("filename_prefix")
-            and not settings.get("filename_suffix")
-            and not settings.get("filename_index_enabled")
-            and not settings.get("metadata_enabled")
+            and cfg.ALLOW_FORWARD_AS_FALLBACK
+            and not has_transforming_settings(settings)
         )
 
         if not is_media_message(source_msg):
@@ -1528,29 +1613,39 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
             delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
         else:
             if direct_copy_allowed:
-                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct copy path", "is_visible": True})
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct source save path", "is_visible": True})
                 await update_task_status_message(client, task_id)
                 delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
             elif direct_forward_allowed and user_client:
-                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct forward path", "is_visible": True})
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct source save path", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
-                targets = []
-                if destination:
-                    targets.append(destination)
-                if LOG_CHANNEL and str(LOG_CHANNEL) != str(destination):
-                    targets.append(LOG_CHANNEL)
-
                 delivered_to, delivery_errors = [], []
-                for target in targets:
-                    result = await try_direct_forward_with_user_client(user_client, source_msg, target, settings)
-                    if result:
-                        delivered_to.append(str(target))
-                    else:
-                        delivery_errors.append(f"{target}: direct forward not allowed")
+                direct_result = None
 
-                if not delivered_to:
-                    touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download path", "is_visible": True})
+                if destination:
+                    direct_result = await try_direct_forward_with_user_client(user_client, source_msg, destination, settings)
+                    if direct_result:
+                        delivered_to.append(str(destination))
+                    else:
+                        delivery_errors.append(f"{destination}: direct save not allowed")
+
+                if LOG_CHANNEL and str(LOG_CHANNEL) != str(destination):
+                    if direct_result and ENABLE_LOG_FROM_DESTINATION:
+                        copied = await copy_result_to_log_channel(client, direct_result, settings)
+                        if copied:
+                            delivered_to.append(str(LOG_CHANNEL))
+                        else:
+                            delivery_errors.append(f"{LOG_CHANNEL}: copy from destination failed")
+                    else:
+                        log_result = await try_direct_forward_with_user_client(user_client, source_msg, LOG_CHANNEL, settings)
+                        if log_result:
+                            delivered_to.append(str(LOG_CHANNEL))
+                        else:
+                            delivery_errors.append(f"{LOG_CHANNEL}: direct save not allowed")
+
+                if not direct_result and not delivered_to:
+                    touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download then upload path", "is_visible": True})
                     await update_task_status_message(client, task_id)
 
                     download_path = get_temp_download_path(source_msg)
@@ -1575,7 +1670,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
                         client, task_id, source_msg, settings, destination, download_path, index_no=user_index_no
                     )
             else:
-                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "", "is_visible": True})
+                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Download first path", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
                 download_path = get_temp_download_path(source_msg)
@@ -2757,35 +2852,34 @@ async def catch_all(client, message):
         await message.reply_text("✅ Batch links save ho gaye.\n/settings me Batch section se Start Batch chala sakte ho.")
         return
 
-    if is_index_mode(user_id):
-        ignored_cmds = (
-            "/stop_index",
-            "/index_stats",
-            "/index_id",
-            "/settings",
-            "/cancel",
-            "/start",
-            "/help",
-            "/plan",
-            "/terms",
-            "/ping",
-            "/login",
-            "/login_status",
-            "/logout",
-            "/my_tasks",
-        )
+    ignored_cmds = (
+        "/stop_index",
+        "/index_stats",
+        "/index_id",
+        "/settings",
+        "/cancel",
+        "/start",
+        "/help",
+        "/plan",
+        "/terms",
+        "/ping",
+        "/login",
+        "/login_status",
+        "/logout",
+        "/my_tasks",
+    )
 
-        if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
-            if is_batch_mode(user_id):
-                links = parse_batch_links(text_raw)
-                if links:
-                    await process_batch_links(client, user_id, message, text_raw)
-                    return
-
-            info = extract_telegram_link_info(text_raw)
-            if info:
-                await process_link_task(client, user_id, message, text_raw.strip())
+    if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
+        if is_batch_mode(user_id):
+            links = parse_batch_links(text_raw)
+            if links:
+                await process_batch_links(client, user_id, message, text_raw)
                 return
+
+        info = extract_telegram_link_info(text_raw)
+        if info:
+            await process_link_task(client, user_id, message, text_raw.strip())
+            return
 
     if state and not lowered.startswith("/cancel"):
         setting_key = WAITING_KEYS.get(state)

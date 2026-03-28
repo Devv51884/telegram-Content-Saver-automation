@@ -7,40 +7,65 @@
     "login_password": "",
     "phone": "",
     "phone_code_hash": "",
-    "last_updated_at": "2026-03-28T09:55:03.331497+00:00",
+    "last_updated_at": "2026-03-28T15:58:47.062620+00:00"
+  },
+  "6949344152": {
+    "user_id": 6949344152,
+    "state": "",
+    "login_phone": "",
+    "login_code": "",
+    "login_password": "",
+    "phone": "",
+    "phone_code_hash": "",
+    "last_updated_at": "2026-03-28T17:08:00.127904+00:00",
     "batch_board": {
-      "batch_key": "c4b91692f3",
-      "user_id": 6747712268,
-      "status": "Completed",
-      "total": 1,
-      "queued": 0,
+      "batch_key": "16e71cb08b",
+      "user_id": 6949344152,
+      "status": "Running",
+      "total": 5,
+      "queued": 1,
       "running": 0,
-      "completed": 1,
+      "completed": 3,
       "failed": 0,
-      "current_index": 1,
-      "current_source": "https://t.me/c/2121019606/269",
-      "current_stage": "Completed",
-      "progress_percent": 100.0,
-      "progress_bar_text": "██████████",
-      "processed_text": "45.40 MB / 45.40 MB",
-      "speed_text": "34.55 KB/s",
+      "current_index": 4,
+      "current_source": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/14",
+      "current_stage": "Checking",
+      "progress_percent": 0.0,
+      "progress_bar_text": "",
+      "processed_text": "",
+      "speed_text": "",
       "eta_text": "",
-      "elapsed_text": "29m 34s",
-      "note": "Last done: item 1",
+      "elapsed_text": "1m 42s",
+      "note": "Last done: item 3",
       "tasks": {
-        "04ad8f77c221": {
+        "15a2a632d330": {
           "index": 1,
-          "source": "https://t.me/c/2121019606/269",
+          "source": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/11",
           "status": "completed"
+        },
+        "6dbd1602678c": {
+          "index": 2,
+          "source": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/12",
+          "status": "completed"
+        },
+        "e4566b60893a": {
+          "index": 3,
+          "source": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/13",
+          "status": "completed"
+        },
+        "c557e7da7514": {
+          "index": 4,
+          "source": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/14",
+          "status": "checking"
         }
       },
-      "started_ts": 1774689928.1986022,
-      "done": true,
-      "chat_id": 6747712268,
-      "message_id": 762,
+      "started_ts": 1774717577.4797995,
+      "done": false,
+      "chat_id": 6949344152,
+      "message_id": 1017,
       "pinned": false,
-      "current_task_id": "",
-      "batch_name": "Private Channel Batch"
+      "current_task_id": "c557e7da7514",
+      "batch_name": "Telegram Batch Job"
     }
   }
 }

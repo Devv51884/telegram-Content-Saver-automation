@@ -1,10 +1,10 @@
 {
   "6747712268": {
     "enabled": true,
-    "count": 84,
+    "count": 115,
     "user_start_offset": 0,
-    "user_current_index": 1,
-    "last_reset_at": "2026-03-28T09:23:11.948950"
+    "user_current_index": 19,
+    "last_reset_at": "2026-03-28T15:00:01.009235"
   },
   "7465924968": {
     "enabled": false,
@@ -12,5 +12,19 @@
     "user_start_offset": 0,
     "user_current_index": 0,
     "last_reset_at": "2026-03-24T07:46:09.046070"
+  },
+  "6859104243": {
+    "enabled": true,
+    "count": 8,
+    "user_start_offset": 0,
+    "user_current_index": 8,
+    "last_reset_at": "2026-03-28T14:18:05.721674"
+  },
+  "6949344152": {
+    "enabled": false,
+    "count": 5,
+    "user_start_offset": 0,
+    "user_current_index": 4,
+    "last_reset_at": "2026-03-28T16:42:24.481837"
   }
 }
