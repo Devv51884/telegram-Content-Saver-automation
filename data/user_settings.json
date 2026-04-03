@@ -40,8 +40,8 @@
     "upload_mode": "document",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
-    "caption_enabled": true,
-    "caption_text": "{index} | {filename}",
+    "caption_enabled": false,
+    "caption_text": "",
     "caption_parse_mode": "html",
     "caption_index_enabled": true,
     "caption_index_padding": 2,
@@ -71,7 +71,7 @@
     "batch_mode": true,
     "batch_last_input": "https://t.me/c/3864611394/179-185",
     "user_id": 6949344152,
-    "updated_at": "2026-04-03T10:33:35.511308+00:00"
+    "updated_at": "2026-04-03T11:18:08.546713+00:00"
   },
   "7465924968": {
     "upload_mode": "media",

@@ -1375,7 +1375,7 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
 
     try:
         msg = await bot_client.get_messages(info["chat_id"], info["message_id"])
-        if msg:
+        if msg and not getattr(msg, "empty", False):
             return msg, info, None, "bot"
     except Exception:
         pass
@@ -1384,7 +1384,7 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
         user_client = await get_authorized_client_for_user(user_id)
         try:
             msg = await user_client.get_messages(info["chat_id"], info["message_id"])
-            if msg:
+            if msg and not getattr(msg, "empty", False):
                 return msg, info, user_client, "user"
         except Exception:
             await user_client.disconnect()
@@ -1400,9 +1400,36 @@ def can_direct_copy(source_msg, settings: dict, fetch_mode: str = "bot") -> bool
         return False
     if fetch_mode == "bot":
         return bool(ENABLE_DIRECT_PUBLIC_COPY and cfg.PREFER_COPY_OVER_DOWNLOAD)
-    if fetch_mode == "user":
-        return bool(ENABLE_DIRECT_PRIVATE_COPY and cfg.ALLOW_FORWARD_AS_FALLBACK)
+    # Private/user-session sources ko bot client se direct copy nahi karna chahiye.
+    # Unke liye alag user-client fast path use hota hai.
     return False
+
+
+def has_transferable_content(source_msg) -> bool:
+    if not source_msg:
+        return False
+    if is_media_message(source_msg):
+        return True
+    if str(getattr(source_msg, "text", "") or "").strip():
+        return True
+    if str(getattr(source_msg, "caption", "") or "").strip():
+        return True
+    media_name = str(getattr(source_msg, "media", "") or "").strip().lower()
+    if media_name and media_name not in {"none", "0", "messagemediatype.empty", "empty"}:
+        return True
+    return False
+
+
+def get_transfer_validation_error(source_msg) -> str | None:
+    if not source_msg:
+        return "Source post fetch nahi hua. Link invalid ho sakti hai ya access missing hai."
+    if getattr(source_msg, "empty", False):
+        return "Source post empty/not found mili. Shayad link par post exist nahi karti."
+    if getattr(source_msg, "service", None):
+        return "Ye service/system message hai, isliye save nahi ki ja sakti."
+    if not has_transferable_content(source_msg):
+        return "Is link par transferable post content nahi mila. Post deleted, invalid, ya unsupported ho sakti hai."
+    return None
 
 
 async def try_direct_copy(client, source_msg, target, settings: dict):
@@ -1699,6 +1726,10 @@ async def process_source_message_transfer(client, user_id: int, message, source_
     delivery_errors = []
 
     try:
+        validation_error = get_transfer_validation_error(source_msg)
+        if validation_error:
+            raise RuntimeError(validation_error)
+
         entry = build_index_entry(user_id, source_msg, source_label, info)
         idx_no = add_index_entry(entry)
         user_count_now = increase_index_user_count(user_id)
@@ -1722,17 +1753,7 @@ async def process_source_message_transfer(client, user_id: int, message, source_
         else:
             fallback_download = True
 
-            if direct_copy_allowed:
-                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct save path", "is_visible": True})
-                await update_task_status_message(client, task_id)
-                try:
-                    delivered_to, delivery_errors = await deliver_primary_then_log(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
-                    fallback_download = not delivered_to
-                except Exception as copy_error:
-                    delivered_to, delivery_errors = [], [str(copy_error)]
-                    fallback_download = True
-
-            elif direct_forward_allowed and user_client:
+            if direct_forward_allowed and user_client:
                 touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct save path", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
@@ -1752,7 +1773,11 @@ async def process_source_message_transfer(client, user_id: int, message, source_
                         if copied:
                             delivered_to.append(str(LOG_CHANNEL))
                         else:
-                            delivery_errors.append(f"{LOG_CHANNEL}: copy from destination failed")
+                            log_result = await try_direct_forward_with_user_client(user_client, source_msg, LOG_CHANNEL, settings)
+                            if log_result:
+                                delivered_to.append(str(LOG_CHANNEL))
+                            else:
+                                delivery_errors.append(f"{LOG_CHANNEL}: copy from destination failed")
                     else:
                         log_result = await try_direct_forward_with_user_client(user_client, source_msg, LOG_CHANNEL, settings)
                         if log_result:
@@ -1761,6 +1786,17 @@ async def process_source_message_transfer(client, user_id: int, message, source_
                             delivery_errors.append(f"{LOG_CHANNEL}: direct save not allowed")
 
                 fallback_download = not delivered_to
+
+            elif direct_copy_allowed:
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct save path", "is_visible": True})
+                await update_task_status_message(client, task_id)
+                try:
+                    delivered_to, delivery_errors = await deliver_primary_then_log(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
+                    fallback_download = not delivered_to
+                except Exception as copy_error:
+                    delivered_to, delivery_errors = [], [str(copy_error)]
+                    fallback_download = True
+
 
             if fallback_download:
                 touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download path" if delivery_errors else "", "is_visible": True})
@@ -2995,7 +3031,18 @@ async def catch_all(client, message):
     lowered = text.lower()
     state = get_user_state(user_id)
 
-    if state == "login_phone" and not lowered.startswith("/cancel"):
+    if lowered.startswith("/login"):
+        if has_user_session(user_id):
+            await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(True))
+            return
+        clear_login_temp(user_id)
+        clear_user_state(user_id)
+        await cleanup_login_client(user_id)
+        set_user_state(user_id, "login_phone")
+        await message.reply_text(ask_phone_text())
+        return
+
+    if state == "login_phone" and not lowered.startswith("/"):
         phone = text.replace(" ", "")
         try:
             await begin_login_flow(user_id, phone)
@@ -3011,7 +3058,7 @@ async def catch_all(client, message):
             await message.reply_text(login_failed_text(str(e)))
             return
 
-    if state == "login_code" and not lowered.startswith("/cancel"):
+    if state == "login_code" and not lowered.startswith("/"):
         code = text.replace(" ", "")
         try:
             me, phone = await finish_login_with_code(user_id, code)
@@ -3027,7 +3074,7 @@ async def catch_all(client, message):
             await message.reply_text(login_failed_text(str(e)))
             return
 
-    if state == "login_password" and not lowered.startswith("/cancel"):
+    if state == "login_password" and not lowered.startswith("/"):
         try:
             me, phone = await finish_login_with_password(user_id, text)
             await message.reply_text(login_success_text(phone))
@@ -3039,7 +3086,7 @@ async def catch_all(client, message):
             await message.reply_text(login_failed_text(str(e)))
             return
 
-    if state == "set_batch_links" and not lowered.startswith("/cancel"):
+    if state == "set_batch_links" and not lowered.startswith("/"):
         save_batch_input(user_id, text_raw)
         clear_user_state(user_id)
         await message.reply_text("✅ Batch links save ho gaye.\n/settings me Batch section se Start Batch chala sakte ho.")
@@ -3159,14 +3206,6 @@ async def catch_all(client, message):
             reply_markup=build_settings_home_markup(user_id),
             disable_web_page_preview=True,
         )
-        return
-
-    if lowered.startswith("/login"):
-        if has_user_session(user_id):
-            await message.reply_text(login_status_text(user_id), reply_markup=login_buttons(True))
-            return
-        set_user_state(user_id, "login_phone")
-        await message.reply_text(ask_phone_text())
         return
 
     if lowered.startswith("/login_status"):
