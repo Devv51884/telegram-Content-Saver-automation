@@ -3,8 +3,8 @@
     "upload_mode": "document",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
-    "caption_enabled": true,
-    "caption_text": "{index} | {filename}",
+    "caption_enabled": false,
+    "caption_text": "",
     "caption_parse_mode": "html",
     "caption_index_enabled": true,
     "caption_index_padding": 2,
@@ -32,16 +32,16 @@
     "authorized_mode": true,
     "last_login_user_id": 6747712268,
     "batch_mode": true,
-    "batch_last_input": "https://t.me/BadaBusinessVivekBindraCourse/722",
+    "batch_last_input": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/22-126",
     "user_id": 6747712268,
-    "updated_at": "2026-03-28T15:57:16.453148+00:00"
+    "updated_at": "2026-04-03T08:46:55.587863+00:00"
   },
   "6949344152": {
     "upload_mode": "document",
     "thumbnail_enabled": false,
     "thumbnail_file_id": "",
-    "caption_enabled": false,
-    "caption_text": "",
+    "caption_enabled": true,
+    "caption_text": "{index} | {filename}",
     "caption_parse_mode": "html",
     "caption_index_enabled": true,
     "caption_index_padding": 2,
@@ -66,12 +66,12 @@
     "upload_destination": "-1003496689015",
     "topic_id": "",
     "index_mode": false,
-    "authorized_mode": false,
-    "last_login_user_id": 0,
+    "authorized_mode": true,
+    "last_login_user_id": 6949344152,
     "batch_mode": true,
-    "batch_last_input": "https://t.me/nddndbdbdbndsnmxndlsslxnxnxmdk/11-15",
+    "batch_last_input": "https://t.me/c/3864611394/179-185",
     "user_id": 6949344152,
-    "updated_at": "2026-03-28T17:06:16.821677+00:00"
+    "updated_at": "2026-04-03T10:33:35.511308+00:00"
   },
   "7465924968": {
     "upload_mode": "media",

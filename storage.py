@@ -1338,8 +1338,32 @@ def _normalize_batch_token(token: str) -> str:
 
 def _expand_tme_range_link(link: str):
     link = _normalize_batch_token(link)
+    link = link.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     if not link.startswith("https://t.me/"):
         return []
+
+    private_range = re.fullmatch(r"(https://t\.me/c/\d+/)(\d+)-(\d+)", link)
+    private_topic_range = re.fullmatch(r"(https://t\.me/c/\d+/\d+/)(\d+)-(\d+)", link)
+    public_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/)(\d+)-(\d+)", link)
+    public_topic_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/\d+/)(\d+)-(\d+)", link)
+
+    private_single = re.fullmatch(r"https://t\.me/c/\d+/\d+", link)
+    private_topic_single = re.fullmatch(r"https://t\.me/c/\d+/\d+/\d+", link)
+    public_single = re.fullmatch(r"https://t\.me/[A-Za-z0-9_]+/\d+", link)
+    public_topic_single = re.fullmatch(r"https://t\.me/[A-Za-z0-9_]+/\d+/\d+", link)
+
+    for match in (private_range, private_topic_range, public_range, public_topic_range):
+        if match:
+            prefix = match.group(1)
+            start = int(match.group(2))
+            end = int(match.group(3))
+            if start > end:
+                start, end = end, start
+            return [f"{prefix}{message_id}" for message_id in range(start, end + 1)]
+
+    if private_single or private_topic_single or public_single or public_topic_single:
+        return [link]
+    return []
     private_range = re.fullmatch(r"(https://t\.me/c/\d+/)(\d+)-(\d+)", link)
     public_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/)(\d+)-(\d+)", link)
     private_single = re.fullmatch(r"https://t\.me/c/\d+/\d+", link)

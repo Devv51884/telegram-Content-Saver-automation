@@ -8,6 +8,7 @@ import asyncio
 import config as cfg
 
 from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
 from pyrogram.errors import (
     UserNotParticipant,
     SessionPasswordNeeded,
@@ -345,6 +346,44 @@ def render_template(template: str, context: dict) -> str:
     for key, value in context.items():
         result = result.replace("{" + key + "}", str(value))
     return result
+
+
+def get_parse_mode(value: str | None):
+    value = str(value or "").strip().lower()
+    if value == "markdown":
+        return ParseMode.MARKDOWN
+    if value in {"disabled", "none", "off", "text"}:
+        return None
+    return ParseMode.HTML
+
+
+def ensure_non_empty_text(value: str | None) -> str:
+    value = str(value or "")
+    return value if value.strip() else "⁣"
+
+
+def resolve_downloaded_path(requested_path: str | None, download_result) -> str:
+    candidates = []
+    if isinstance(download_result, str):
+        candidates.append(download_result)
+    if isinstance(requested_path, str):
+        candidates.append(requested_path)
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return str(download_result or requested_path or "")
+
+
+def ensure_valid_downloaded_file(file_path: str):
+    if not file_path or not os.path.exists(file_path):
+        raise RuntimeError("Download complete hone ke baad file temp me nahi mili.")
+    try:
+        size = os.path.getsize(file_path)
+    except Exception:
+        size = 0
+    if size <= 0:
+        raise RuntimeError("Downloaded file ka size 0 B aaya. Source restricted/protected ho sakta hai ya download corrupt hua hai.")
+    return file_path
 
 
 def build_final_caption(source_msg, settings: dict, index_no: int = 0):
@@ -977,7 +1016,24 @@ async def _run_task_attempts(client, item: dict):
                 })
                 await update_task_status_message(client, task_id)
 
-            await _perform_transfer(client, user_id, message, link_text, task_id, settings, destination)
+            source_message = item.get("source_message")
+            if source_message is not None:
+                await process_source_message_transfer(
+                    client,
+                    user_id,
+                    message,
+                    source_message,
+                    task_id,
+                    settings,
+                    destination,
+                    f"direct:{getattr(source_message, 'id', 0)}",
+                    info={"link_type": "direct_message"},
+                    user_client=None,
+                    fetch_mode="bot",
+                    disconnect_user_client=False,
+                )
+            else:
+                await _perform_transfer(client, user_id, message, link_text, task_id, settings, destination)
             return True
 
         except FloodWait as e:
@@ -988,12 +1044,33 @@ async def _run_task_attempts(client, item: dict):
             return False
 
         except Exception as e:
-            should_retry = AUTO_RETRY_FAILED_TASKS and attempt < MAX_RETRY_ATTEMPTS
+            error_text = str(e or "")
+            lowered_error = error_text.lower()
+
+            if "task cancelled by user" in lowered_error or "cancelled by user" in lowered_error:
+                touch_task(task_id, {"status": "cancelled", "current_stage": "cancelled", "error": "Cancelled by user", "is_visible": True})
+                await update_task_status_message(client, task_id, done=True)
+                return False
+
+            retryable_tokens = (
+                "timeout",
+                "timed out",
+                "network",
+                "connection reset",
+                "server disconnected",
+                "temporarily unavailable",
+                "internal server error",
+            )
+            should_retry = (
+                AUTO_RETRY_FAILED_TASKS
+                and attempt < MAX_RETRY_ATTEMPTS
+                and any(token in lowered_error for token in retryable_tokens)
+            )
             if should_retry:
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
 
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": str(e), "is_visible": True})
+            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": error_text, "is_visible": True})
             await update_task_status_message(client, task_id, done=True)
             if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
                 await message.reply_text(f"❌ Task failed:\n{e}")
@@ -1179,6 +1256,42 @@ def extract_telegram_link_info(text: str):
         return None
 
     text = str(text).strip()
+    text = text.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+
+    private_topic_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)/(\d+)$", text)
+    private_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)$", text)
+    public_topic_match = re.search(r"https?://(?:t|telegram)\.me/([A-Za-z0-9_]+)/(\d+)/(\d+)$", text)
+    public_match = re.search(r"https?://(?:t|telegram)\.me/([A-Za-z0-9_]+)/(\d+)$", text)
+
+    if private_topic_match:
+        raw_chat_id = private_topic_match.group(1)
+        topic_id = int(private_topic_match.group(2))
+        msg_id = int(private_topic_match.group(3))
+        chat_id = int(f"-100{raw_chat_id}")
+        return {"chat_id": chat_id, "message_id": msg_id, "topic_id": topic_id, "link_type": "private_topic"}
+
+    if private_match:
+        raw_chat_id = private_match.group(1)
+        msg_id = int(private_match.group(2))
+        chat_id = int(f"-100{raw_chat_id}")
+        return {"chat_id": chat_id, "message_id": msg_id, "link_type": "private"}
+
+    if public_topic_match:
+        username = public_topic_match.group(1)
+        topic_id = int(public_topic_match.group(2))
+        msg_id = int(public_topic_match.group(3))
+        if username.lower() != "c":
+            return {"chat_id": username, "message_id": msg_id, "topic_id": topic_id, "link_type": "public_topic"}
+
+    if public_match:
+        username = public_match.group(1)
+        msg_id = int(public_match.group(2))
+        if username.lower() != "c":
+            return {"chat_id": username, "message_id": msg_id, "link_type": "public"}
+
+    return None
+
+    text = str(text).strip()
     text = text.split("?", 1)[0].split("#", 1)[0]
 
     private_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)", text)
@@ -1292,20 +1405,6 @@ def can_direct_copy(source_msg, settings: dict, fetch_mode: str = "bot") -> bool
     return False
 
 
-
-def should_force_download_for_source(info: dict | None, source_msg, settings: dict, fetch_mode: str = "bot") -> bool:
-    if not is_media_message(source_msg):
-        return False
-    if has_transforming_settings(settings):
-        return True
-
-    link_type = str((info or {}).get("link_type") or "").strip().lower()
-    if link_type == "private":
-        return True
-
-    return False
-
-
 async def try_direct_copy(client, source_msg, target, settings: dict):
     topic_id = safe_topic_id(settings.get("topic_id", ""))
     result = await client.copy_message(
@@ -1339,6 +1438,8 @@ async def get_thumbnail_temp_path(client, settings: dict, task_id: str = ""):
 async def upload_file_to_target(client, task_id: str, target, file_path: str, source_msg, settings: dict, index_no: int = 0):
     ensure_task_not_cancelled(task_id)
     caption = build_final_caption(source_msg, settings, index_no=index_no)
+    caption = caption if str(caption or "").strip() else None
+    caption_parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html")) if caption else None
     topic_id = safe_topic_id(settings.get("topic_id", ""))
     thumb_path = None
 
@@ -1352,8 +1453,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
             result = await client.send_document(
                 chat_id=target,
                 document=file_path,
-                caption=caption if caption else None,
-                parse_mode="HTML",
+                caption=caption,
+                parse_mode=caption_parse_mode,
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1367,8 +1468,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
             result = await client.send_photo(
                 chat_id=target,
                 photo=file_path,
-                caption=caption if caption else None,
-                parse_mode="HTML",
+                caption=caption,
+                parse_mode=caption_parse_mode,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
                 progress_args=(client, task_id, "uploading"),
@@ -1381,8 +1482,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
             result = await client.send_video(
                 chat_id=target,
                 video=file_path,
-                caption=caption if caption else None,
-                parse_mode="HTML",
+                caption=caption,
+                parse_mode=caption_parse_mode,
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1396,8 +1497,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
             result = await client.send_audio(
                 chat_id=target,
                 audio=file_path,
-                caption=caption if caption else None,
-                parse_mode="HTML",
+                caption=caption,
+                parse_mode=caption_parse_mode,
                 thumb=thumb_path if thumb_path else None,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
@@ -1411,8 +1512,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
             result = await client.send_voice(
                 chat_id=target,
                 voice=file_path,
-                caption=caption if caption else None,
-                parse_mode="HTML",
+                caption=caption,
+                parse_mode=caption_parse_mode,
                 message_thread_id=topic_id if topic_id else None,
                 progress=progress_callback,
                 progress_args=(client, task_id, "uploading"),
@@ -1424,7 +1525,8 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
         result = await client.send_document(
             chat_id=target,
             document=file_path,
-            caption=caption if caption else None,
+            caption=caption,
+            parse_mode=caption_parse_mode,
             thumb=thumb_path if thumb_path else None,
             message_thread_id=topic_id if topic_id else None,
             progress=progress_callback,
@@ -1443,11 +1545,13 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
 
 async def send_text_to_target(client, target, source_msg, settings: dict, index_no: int = 0):
     topic_id = safe_topic_id(settings.get("topic_id", ""))
-    final_text = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no)
+    raw_text = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no)
+    final_text = ensure_non_empty_text(raw_text)
+    parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html")) if str(raw_text or "").strip() else None
     result = await client.send_message(
         chat_id=target,
         text=final_text,
-        parse_mode="HTML",
+        parse_mode=parse_mode,
         message_thread_id=topic_id if topic_id else None,
         disable_web_page_preview=True,
     )
@@ -1561,45 +1665,49 @@ async def deliver_one_target(client, task_id: str, source_msg, settings: dict, t
 
 
 async def deliver_to_destinations(client, task_id: str, source_msg, settings: dict, destination, download_path=None, index_no: int = 0):
-    return await deliver_primary_then_log(
-        client,
-        task_id,
-        source_msg,
-        settings,
-        destination,
-        download_path=download_path,
-        index_no=index_no,
-    )
+    targets = []
+    if destination:
+        targets.append(destination)
+    if LOG_CHANNEL and str(LOG_CHANNEL) != str(destination):
+        targets.append(LOG_CHANNEL)
+
+    if not targets:
+        raise RuntimeError("No destination configured. Destination aur log channel dono blank hain.")
+
+    delivered_to = []
+    delivery_errors = []
+
+    for target in targets:
+        try:
+            result = await deliver_one_target(client, task_id, source_msg, settings, target, download_path, index_no=index_no)
+            if result:
+                delivered_to.append(str(target))
+            else:
+                delivery_errors.append(f"{target}: send returned empty response")
+        except Exception as e:
+            delivery_errors.append(f"{target}: {e}")
+
+    if not delivered_to:
+        raise RuntimeError("Delivery failed: " + " | ".join(delivery_errors))
+
+    return delivered_to, delivery_errors
 
 
-async def _perform_transfer(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
-    user_client = None
+async def process_source_message_transfer(client, user_id: int, message, source_msg, task_id: str, settings: dict, destination, source_label: str, info: dict | None = None, user_client=None, fetch_mode: str = "bot", disconnect_user_client: bool = False):
     download_path = None
+    delivered_to = []
+    delivery_errors = []
 
     try:
-        touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": "", "is_visible": False})
-        await update_task_status_message(client, task_id)
-
-        ensure_task_not_cancelled(task_id)
-        source_msg, info, user_client, fetch_mode = await fetch_message_via_best_client(client, user_id, link_text)
-
-        if not source_msg:
-            raise RuntimeError("Source message fetch nahi ho paya. Public access ya authorized login required.")
-
-        entry = build_index_entry(user_id, source_msg, link_text, info)
+        entry = build_index_entry(user_id, source_msg, source_label, info)
         idx_no = add_index_entry(entry)
         user_count_now = increase_index_user_count(user_id)
         user_index_no = get_next_user_index(user_id) - 1 or 1
 
-        force_download_flow = should_force_download_for_source(info, source_msg, settings, fetch_mode=fetch_mode)
-
-        direct_copy_allowed = bool(
-            not force_download_flow
-            and can_direct_copy(source_msg, settings, fetch_mode=fetch_mode)
-        )
+        direct_copy_allowed = can_direct_copy(source_msg, settings, fetch_mode=fetch_mode)
         direct_forward_allowed = bool(
-            not force_download_flow
-            and fetch_mode == "user"
+            fetch_mode == "user"
+            and user_client
             and is_media_message(source_msg)
             and cfg.ALLOW_FORWARD_AS_FALLBACK
             and not has_transforming_settings(settings)
@@ -1610,14 +1718,22 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
                 raise RuntimeError("Source post media-like hai but media object resolve nahi hua. Authorized login se dubara try karo.")
             touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
             await update_task_status_message(client, task_id)
-            delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
+            delivered_to, delivery_errors = await deliver_primary_then_log(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
         else:
+            fallback_download = True
+
             if direct_copy_allowed:
-                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct source save path", "is_visible": True})
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct save path", "is_visible": True})
                 await update_task_status_message(client, task_id)
-                delivered_to, delivery_errors = await deliver_to_destinations(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
+                try:
+                    delivered_to, delivery_errors = await deliver_primary_then_log(client, task_id, source_msg, settings, destination, None, index_no=user_index_no)
+                    fallback_download = not delivered_to
+                except Exception as copy_error:
+                    delivered_to, delivery_errors = [], [str(copy_error)]
+                    fallback_download = True
+
             elif direct_forward_allowed and user_client:
-                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct source save path", "is_visible": True})
+                touch_task(task_id, {"status": "copying", "current_stage": "copying", "progress_text": "Direct save path", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
                 delivered_to, delivery_errors = [], []
@@ -1644,54 +1760,29 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
                         else:
                             delivery_errors.append(f"{LOG_CHANNEL}: direct save not allowed")
 
-                if not direct_result and not delivered_to:
-                    touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download then upload path", "is_visible": True})
-                    await update_task_status_message(client, task_id)
+                fallback_download = not delivered_to
 
-                    download_path = get_temp_download_path(source_msg)
-                    source_client = user_client if user_client else client
-
-                    await source_client.download_media(
-                        source_msg,
-                        file_name=download_path,
-                        progress=progress_callback,
-                        progress_args=(client, task_id, "downloading"),
-                    )
-
-                    if not download_path or not os.path.exists(download_path):
-                        raise RuntimeError("Download complete hone ke baad file temp me nahi mili.")
-
-                    download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
-
-                    touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
-                    await update_task_status_message(client, task_id)
-
-                    delivered_to, delivery_errors = await deliver_to_destinations(
-                        client, task_id, source_msg, settings, destination, download_path, index_no=user_index_no
-                    )
-            else:
-                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Download first path", "is_visible": True})
+            if fallback_download:
+                touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": "Fallback download path" if delivery_errors else "", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
-                download_path = get_temp_download_path(source_msg)
+                download_hint = get_temp_download_path(source_msg)
                 source_client = user_client if user_client else client
-
-                await source_client.download_media(
+                download_result = await source_client.download_media(
                     source_msg,
-                    file_name=download_path,
+                    file_name=download_hint,
                     progress=progress_callback,
                     progress_args=(client, task_id, "downloading"),
                 )
-
-                if not download_path or not os.path.exists(download_path):
-                    raise RuntimeError("Download complete hone ke baad file temp me nahi mili.")
-
+                download_path = resolve_downloaded_path(download_hint, download_result)
+                ensure_valid_downloaded_file(download_path)
                 download_path = rename_downloaded_file(download_path, source_msg, settings, index_no=user_index_no)
+                ensure_valid_downloaded_file(download_path)
 
                 touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": "", "is_visible": True})
                 await update_task_status_message(client, task_id)
 
-                delivered_to, delivery_errors = await deliver_to_destinations(
+                delivered_to, delivery_errors = await deliver_primary_then_log(
                     client, task_id, source_msg, settings, destination, download_path, index_no=user_index_no
                 )
 
@@ -1733,7 +1824,7 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
             await message.reply_text("⚠️ Kuch targets par send fail hua:\n" + "\n".join(delivery_errors[:5]))
 
     finally:
-        if user_client:
+        if disconnect_user_client and user_client:
             try:
                 await user_client.disconnect()
             except Exception:
@@ -1743,6 +1834,32 @@ async def _perform_transfer(client, user_id: int, message, link_text: str, task_
                 os.remove(download_path)
             except Exception:
                 pass
+
+
+async def _perform_transfer(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
+    touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": "", "is_visible": False})
+    await update_task_status_message(client, task_id)
+
+    ensure_task_not_cancelled(task_id)
+    source_msg, info, user_client, fetch_mode = await fetch_message_via_best_client(client, user_id, link_text)
+
+    if not source_msg:
+        raise RuntimeError("Source message fetch nahi ho paya. Public access ya authorized login required.")
+
+    await process_source_message_transfer(
+        client,
+        user_id,
+        message,
+        source_msg,
+        task_id,
+        settings,
+        destination,
+        link_text,
+        info=info,
+        user_client=user_client,
+        fetch_mode=fetch_mode,
+        disconnect_user_client=True,
+    )
 
 
 async def process_link_task(client, user_id: int, message, link_text: str, batch_mode: bool = False, batch_key: str = "", batch_index: int = 0, batch_total: int = 0):
@@ -1768,14 +1885,14 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
         await ask_set_destination(message, checking_message)
         return False
 
-    if info and info.get("link_type") == "private" and not has_user_session(user_id):
+    if info and str(info.get("link_type") or "").lower() in {"private", "private_topic"} and not has_user_session(user_id):
         if batch_mode:
             return False
         await ask_login_for_private_link(message, checking_message)
         return False
 
     cleanup_stale_active_tasks()
-    user_task_limit = min(get_user_task_limit(user_id), MAX_TASKS_PER_USER)
+    user_task_limit = get_user_task_limit(user_id)
     running_now = count_running_tasks(user_id)
     queue_now = TASK_QUEUE.qsize()
 
@@ -1845,6 +1962,82 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
     return task_id
 
 
+async def enqueue_direct_message_task(client, user_id: int, message):
+    await ensure_background_workers_started(client)
+
+    settings = get_user_settings(user_id)
+    destination = normalize_target(settings.get("upload_destination", "")) or DEFAULT_DESTINATION or None
+
+    if not destination:
+        await ask_set_destination(message)
+        return False
+
+    cleanup_stale_active_tasks()
+    user_task_limit = get_user_task_limit(user_id)
+    running_now = count_running_tasks(user_id)
+    queue_now = TASK_QUEUE.qsize()
+
+    if running_now >= user_task_limit:
+        await message.reply_text(f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain.")
+        return False
+
+    if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
+        await message.reply_text("⚠️ Queue full hai. Thodi der baad try karo.")
+        return False
+
+    task_id = make_task_id()
+    queue_position = TASK_QUEUE.qsize() + 1
+    source_label = f"direct:{message.id}"
+
+    touch_task(task_id, {
+        "task_id": task_id,
+        "user_id": user_id,
+        "source": source_label,
+        "destination": str(destination or ""),
+        "user_destination": str(destination or ""),
+        "status": "checking",
+        "current_stage": "checking",
+        "progress": 0.0,
+        "progress_percent": 0.0,
+        "progress_text": "",
+        "error": "",
+        "retry_count": 0,
+        "created_at": now_iso(),
+        "mode": "single",
+        "upload_mode": settings.get("upload_mode", "document"),
+        "topic_id": str(settings.get("topic_id", "") or ""),
+        "queue_position": queue_position,
+        "status_chat_id": 0,
+        "status_message_id": 0,
+        "checking_chat_id": 0,
+        "checking_message_id": 0,
+        "pinned_ui": True,
+        "is_visible": False,
+        "batch_key": "",
+        "batch_index": 0,
+        "batch_total": 0,
+    })
+
+    checking_message = await message.reply_text(
+        checking_text("Direct file received"),
+        disable_web_page_preview=True,
+    )
+    await create_task_status_message(message, task_id, checking_message=checking_message)
+
+    await TASK_QUEUE.put({
+        "task_id": task_id,
+        "user_id": user_id,
+        "message": message,
+        "link_text": source_label,
+        "source_message": message,
+        "settings": settings,
+        "destination": destination,
+        "batch_mode": False,
+    })
+    debug_log(f"Queued direct message task {task_id} for user {user_id}")
+    return task_id
+
+
 async def process_batch_links(client, user_id: int, message, raw_text: str):
     links = parse_batch_links(raw_text)
     if not links:
@@ -1852,7 +2045,7 @@ async def process_batch_links(client, user_id: int, message, raw_text: str):
         return
 
     save_batch_input(user_id, raw_text)
-    user_batch_limit = min(get_user_batch_limit(user_id), MAX_BATCH_LINKS)
+    user_batch_limit = get_user_batch_limit(user_id)
     if len(links) > user_batch_limit:
         links = links[:user_batch_limit]
 
@@ -2797,7 +2990,7 @@ async def catch_all(client, message):
         await message.reply_text("🚫 Aapko is bot se ban kiya gaya hai.")
         return
 
-    text_raw = message.text or ""
+    text_raw = message.text or message.caption or ""
     text = text_raw.strip()
     lowered = text.lower()
     state = get_user_state(user_id)
@@ -2872,7 +3065,10 @@ async def catch_all(client, message):
     if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
         if is_batch_mode(user_id):
             links = parse_batch_links(text_raw)
-            if links:
+            normalized_text = str(text_raw or "").strip()
+            token_count = len([part for part in normalized_text.split() if part.strip()])
+            is_range_input = bool(re.search(r"https?://(?:t|telegram)\.me/\S+?-\d+", normalized_text))
+            if links and (len(links) > 1 or token_count > 1 or is_range_input or "\n" in normalized_text):
                 await process_batch_links(client, user_id, message, text_raw)
                 return
 
@@ -2880,6 +3076,10 @@ async def catch_all(client, message):
         if info:
             await process_link_task(client, user_id, message, text_raw.strip())
             return
+
+    if not state and is_media_message(message):
+        await enqueue_direct_message_task(client, user_id, message)
+        return
 
     if state and not lowered.startswith("/cancel"):
         setting_key = WAITING_KEYS.get(state)

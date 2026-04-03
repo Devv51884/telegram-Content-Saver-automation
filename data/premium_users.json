@@ -1,12 +1,22 @@
 {
   "6747712268": {
     "user_id": 6747712268,
-    "is_premium": false,
-    "plan_name": "",
-    "premium_expires_at": "",
+    "is_premium": true,
+    "plan_name": "Premium",
+    "premium_expires_at": "2026-05-03T06:52:14.872058+00:00",
     "granted_by": 6747712268,
-    "granted_at": "2026-03-24T07:50:54.741224+00:00",
+    "granted_at": "2026-04-03T06:52:14.872058+00:00",
     "notes": "",
-    "updated_at": "2026-03-25T08:01:28.598263+00:00"
+    "updated_at": "2026-04-03T06:52:14.873060+00:00"
+  },
+  "6949344152": {
+    "user_id": 6949344152,
+    "is_premium": true,
+    "plan_name": "Premium",
+    "premium_expires_at": "2026-05-13T09:46:12.686349+00:00",
+    "granted_by": 6747712268,
+    "granted_at": "2026-04-03T09:46:12.686349+00:00",
+    "notes": "",
+    "updated_at": "2026-04-03T09:46:12.686860+00:00"
   }
 }

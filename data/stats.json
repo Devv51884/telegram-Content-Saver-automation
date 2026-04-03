@@ -1,12 +1,12 @@
 {
   "started_at": "2026-03-24T12:46:22.586963",
-  "last_activity_at": "2026-03-28T17:08:02.084702",
-  "users_registered": 208,
+  "last_activity_at": "2026-04-03T10:37:09.439109",
+  "users_registered": 271,
   "tasks_created": 10,
-  "tasks_completed": 31,
-  "tasks_failed": 12,
+  "tasks_completed": 323,
+  "tasks_failed": 26,
   "uploads_completed": 3,
   "batch_runs": 4,
   "broadcast_runs": 0,
-  "premium_users": 0
+  "premium_users": 2
 }
