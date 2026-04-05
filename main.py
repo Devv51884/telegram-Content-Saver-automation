@@ -14,7 +14,7 @@ BOT_STARTUP_MODE = "web+bot"
 
 
 def start_bot():
-    print("🤖 Starting Code Devil Bot V12 ")
+    print("🤖 Starting Code Devil Bot  ")
     set_runtime_state(False, username="unknown", mode=BOT_STARTUP_MODE)
 
     try:
@@ -55,7 +55,7 @@ def start_web():
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Code Devil Restricted Saver V12 ")
+    print("🚀 Starting Code Devil Restricted Saver ")
 
     web_thread = threading.Thread(target=start_web, daemon=True, name="web-server")
     web_thread.start()

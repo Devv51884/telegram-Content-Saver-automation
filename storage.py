@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -22,6 +23,7 @@ from config import (
     STATS_FILE,
     FAILED_TASKS_FILE,
     BROADCAST_LOG_FILE,
+    USER_LIMITS_FILE,
     DATA_DIR,
     DEFAULT_UPLOAD_MODE,
     DEFAULT_PLAN_NAME,
@@ -45,6 +47,10 @@ from config import (
     SUPABASE_BROADCAST_TABLE,
     PREMIUM_GRACE_HOURS,
     TASK_STATUS_TTL_MINUTES,
+    DEFAULT_STORAGE_MODE,
+    FREE_STORAGE_MODES,
+    PREMIUM_STORAGE_MODES,
+    PRO_STORAGE_MODES,
 )
 
 _LOCK = Lock()
@@ -52,7 +58,9 @@ DATA_DIR = DATA_DIR or (os.path.dirname(SETTINGS_FILE) or "data")
 
 
 DEFAULT_SETTINGS = {
-    "upload_mode": DEFAULT_UPLOAD_MODE if str(DEFAULT_UPLOAD_MODE).lower() in {"media", "document"} else "document",
+    "upload_mode": DEFAULT_UPLOAD_MODE if str(DEFAULT_UPLOAD_MODE).lower() in {"media", "document"} else "media",
+    "telegram_upload_mode": DEFAULT_UPLOAD_MODE if str(DEFAULT_UPLOAD_MODE).lower() in {"media", "document"} else "media",
+    "storage_mode": DEFAULT_STORAGE_MODE if str(DEFAULT_STORAGE_MODE).lower() in {"telegram", "gdrive", "rclone"} else "telegram",
     "thumbnail_enabled": False,
     "thumbnail_file_id": "",
     "caption_enabled": False,
@@ -64,6 +72,8 @@ DEFAULT_SETTINGS = {
     "prefix": "",
     "suffix": "",
     "replace_words": "",
+    "replace_words_file": "",
+    "replace_words_caption": "",
     "auto_rename": "",
     "auto_rename_enabled": False,
     "rename_template": "",
@@ -78,6 +88,16 @@ DEFAULT_SETTINGS = {
     "metadata_video_author": "",
     "metadata_audio_title": "",
     "metadata_subtitle_title": "",
+    "gdrive_folder_id": "",
+    "gdrive_token_path": "",
+    "gdrive_last_file_link": "",
+    "rclone_config_path": "",
+    "rclone_remote_path": "",
+    "rclone_last_file_path": "",
+    "personal_bot_token": "",
+    "personal_bot_username": "",
+    "bot_delivery_mode": "main",
+    "route_template": "off",
     "upload_destination": "",
     "topic_id": "",
     "index_mode": False,
@@ -85,6 +105,13 @@ DEFAULT_SETTINGS = {
     "last_login_user_id": 0,
     "batch_mode": False,
     "batch_last_input": "",
+}
+
+
+DEFAULT_USER_LIMITS = {
+    "batch_limit": 0,
+    "task_limit": 0,
+    "allowed_storage_modes": "",
 }
 
 DEFAULT_STATS = {
@@ -105,8 +132,14 @@ WAITING_KEYS = {
     "set_suffix": "suffix",
     "set_auto_rename": "auto_rename",
     "set_destination": "upload_destination",
+    "set_gdrive_folder_id": "gdrive_folder_id",
+    "set_rclone_remote_path": "rclone_remote_path",
+    "set_route_template": "route_template",
+    "set_personal_bot_token": "personal_bot_token",
     "set_topic_id": "topic_id",
     "set_replace_words": "replace_words",
+    "set_replace_words_file": "replace_words_file",
+    "set_replace_words_caption": "replace_words_caption",
     "set_caption_text": "caption_text",
     "set_metadata_video_title": "metadata_video_title",
     "set_metadata_video_author": "metadata_video_author",
@@ -179,13 +212,13 @@ def _to_bool(value, default=False):
         return default
 
 
-def _normalize_upload_mode(value) -> str:
+def _normalize_upload_mode(value, default: str = "media") -> str:
     value = str(value or "").strip().lower()
     if value in {"document", "doc", "file"}:
         return "document"
     if value in {"media", "video", "telegram", "photo", "audio"}:
         return "media"
-    return "document"
+    return "document" if str(default or "media").strip().lower() == "document" else "media"
 
 
 def _now_utc():
@@ -218,6 +251,15 @@ def _parse_iso(value):
 _ACTIVE_TASK_STATUSES = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating", "checking"}
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
 _TASK_STATUS_TTL = max(5, _to_int(TASK_STATUS_TTL_MINUTES, 180))
+_TASK_CACHE_TTL_SECONDS = 15.0
+_TASK_LOCAL_FLUSH_INTERVAL_SECONDS = 2.0
+_TASK_REMOTE_SYNC_INTERVAL_SECONDS = 20.0
+_LAST_ACTIVITY_FLUSH_INTERVAL_SECONDS = 30.0
+_TASKS_CACHE = None
+_TASKS_CACHE_LOADED_AT = 0.0
+_TASKS_LAST_LOCAL_SAVE_AT = 0.0
+_TASKS_LAST_REMOTE_SYNC_AT = 0.0
+_LAST_ACTIVITY_SAVE_AT = 0.0
 
 
 def _task_last_seen_dt(task: dict):
@@ -271,6 +313,22 @@ def _is_countable_running_task(task: dict) -> bool:
     if _is_task_stale(task):
         return False
     return True
+
+
+def _task_status_rank(status: str) -> int:
+    order = {
+        "checking": 1,
+        "queued": 2,
+        "processing": 3,
+        "fetching": 4,
+        "downloading": 5,
+        "uploading": 6,
+        "copying": 7,
+        "completed": 8,
+        "failed": 8,
+        "cancelled": 8,
+    }
+    return order.get(str(status or "").lower(), 0)
 
 
 def _ensure_dir():
@@ -405,7 +463,29 @@ def _normalize_settings(data: dict):
     merged = deepcopy(DEFAULT_SETTINGS)
     if isinstance(data, dict):
         merged.update(data)
-    merged["upload_mode"] = _normalize_upload_mode(merged.get("upload_mode", DEFAULT_SETTINGS["upload_mode"]))
+
+    legacy_replace_words = str(merged.get("replace_words", "") or "").strip()
+    file_replace_words = str(merged.get("replace_words_file", "") or "").strip()
+    caption_replace_words = str(merged.get("replace_words_caption", "") or "").strip()
+    if not file_replace_words and legacy_replace_words:
+        file_replace_words = legacy_replace_words
+    if not caption_replace_words and legacy_replace_words:
+        caption_replace_words = legacy_replace_words
+
+    merged["replace_words"] = legacy_replace_words
+    merged["replace_words_file"] = file_replace_words
+    merged["replace_words_caption"] = caption_replace_words
+
+    merged["upload_mode"] = _normalize_upload_mode(merged.get("telegram_upload_mode", merged.get("upload_mode", DEFAULT_SETTINGS["upload_mode"])))
+    merged["telegram_upload_mode"] = _normalize_upload_mode(merged.get("telegram_upload_mode", merged.get("upload_mode", DEFAULT_SETTINGS["upload_mode"])))
+    storage_mode = str(merged.get("storage_mode", DEFAULT_SETTINGS["storage_mode"]) or DEFAULT_SETTINGS["storage_mode"]).strip().lower()
+    if storage_mode not in {"telegram", "gdrive", "rclone"}:
+        storage_mode = DEFAULT_SETTINGS["storage_mode"]
+    merged["storage_mode"] = storage_mode
+    bot_delivery_mode = str(merged.get("bot_delivery_mode", "main") or "main").strip().lower()
+    merged["bot_delivery_mode"] = bot_delivery_mode if bot_delivery_mode in {"main", "personal"} else "main"
+    route_template = str(merged.get("route_template", "off") or "off").strip().lower()
+    merged["route_template"] = route_template if route_template in {"off", "smart", "docs_to_gdrive", "media_to_telegram", "archives_to_rclone"} else "off"
     merged["caption_index_padding"] = max(1, _to_int(merged.get("caption_index_padding", 2), 2))
     merged["caption_index_start"] = max(0, _to_int(merged.get("caption_index_start", 1), 1))
     merged["filename_index_padding"] = max(1, _to_int(merged.get("filename_index_padding", 2), 2))
@@ -930,6 +1010,7 @@ def register_user(user):
     if user_id <= 0:
         return
     users = get_all_users()
+    is_new_user = str(user_id) not in users
     users[str(user_id)] = _normalize_user_record(
         user_id,
         {
@@ -940,7 +1021,8 @@ def register_user(user):
         },
     )
     save_all_users(users)
-    increment_stat("users_registered", 1)
+    if is_new_user:
+        increment_stat("users_registered", 1)
     touch_last_activity()
 
 
@@ -952,6 +1034,19 @@ def get_recent_users(limit: int = 10):
     users = list(get_all_users().values())
     users.sort(key=lambda item: str(item.get("last_seen", "")), reverse=True)
     return users[: max(1, int(limit))]
+
+
+def get_all_users_sorted():
+    users = list(get_all_users().values())
+    users.sort(key=lambda item: (str(item.get("last_seen", "")), int(item.get("id", 0))), reverse=True)
+    return users
+
+
+def get_all_users_page(limit: int = 20, offset: int = 0):
+    users = get_all_users_sorted()
+    start = max(0, int(offset or 0))
+    end = start + max(1, int(limit or 20))
+    return users[start:end]
 
 
 # =========================================================
@@ -1115,15 +1210,126 @@ def get_premium_expiry_text(user_id: int) -> str:
 
 
 def get_user_plan_name(user_id: int) -> str:
+    record = get_premium_record(user_id)
+    plan_name = str(record.get("plan_name", "") or "").strip()
+    if plan_name:
+        return plan_name
     return DEFAULT_PREMIUM_PLAN_NAME if is_premium_user(user_id) else DEFAULT_PLAN_NAME
 
 
+def _split_plan_features(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        raw_parts = [str(item or "") for item in value]
+    else:
+        raw_text = str(value or "").replace("\r", "\n")
+        raw_parts = []
+        for line in raw_text.splitlines():
+            raw_parts.extend(line.split("|"))
+
+    items = []
+    seen = set()
+    for part in raw_parts:
+        cleaned = str(part or "").strip().lstrip("-").lstrip("•").strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        items.append(cleaned)
+    return items
+
+
+def get_user_plan_features(user_id: int) -> list[str]:
+    record = get_premium_record(user_id)
+    return _split_plan_features(record.get("notes", ""))
+
+
+def set_user_plan_name(user_id: int, plan_name: str, updated_by: int = 0):
+    payload = {"plan_name": str(plan_name or "").strip()}
+    if updated_by:
+        payload["granted_by"] = int(updated_by)
+    return save_premium_record(user_id, payload)
+
+
+def set_user_plan_features(user_id: int, features_text, updated_by: int = 0):
+    normalized = "\n".join(_split_plan_features(features_text))
+    payload = {"notes": normalized}
+    if updated_by:
+        payload["granted_by"] = int(updated_by)
+    return save_premium_record(user_id, payload)
+
+
+
+# =========================================================
+# CUSTOM USER LIMITS / STORAGE ACCESS
+# =========================================================
+def get_all_user_limits():
+    data = _load_local_map(USER_LIMITS_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_all_user_limits(data):
+    _save_local_map(USER_LIMITS_FILE, data if isinstance(data, dict) else {})
+
+
+def _normalize_user_limit_record(user_id: int, data=None):
+    data = data or {}
+    return {
+        "user_id": int(user_id),
+        "batch_limit": max(0, _to_int(data.get("batch_limit", 0), 0)),
+        "task_limit": max(0, _to_int(data.get("task_limit", 0), 0)),
+        "allowed_storage_modes": str(data.get("allowed_storage_modes", "") or ""),
+    }
+
+
+def get_user_limit_record(user_id: int):
+    return _normalize_user_limit_record(user_id, get_all_user_limits().get(str(user_id), {}))
+
+
+def save_user_limit_record(user_id: int, data: dict):
+    limits = get_all_user_limits()
+    current = get_user_limit_record(user_id)
+    if isinstance(data, dict):
+        current.update(data)
+    limits[str(user_id)] = _normalize_user_limit_record(user_id, current)
+    save_all_user_limits(limits)
+    return limits[str(user_id)]
+
+
+def get_user_allowed_storage_modes(user_id: int):
+    record = get_user_limit_record(user_id)
+    raw = [item.strip().lower() for item in str(record.get("allowed_storage_modes", "")).split(",") if item.strip()]
+    if raw:
+        return raw
+    plan_name = str(get_premium_record(user_id).get("plan_name", "") or "").strip().lower()
+    if plan_name == "pro":
+        return list(PRO_STORAGE_MODES)
+    if is_premium_user(user_id):
+        return list(PREMIUM_STORAGE_MODES)
+    return list(FREE_STORAGE_MODES)
+
+
+def user_can_use_storage_mode(user_id: int, storage_mode: str) -> bool:
+    storage_mode = str(storage_mode or "telegram").strip().lower()
+    if storage_mode == "personal_bot":
+        return "personal_bot" in get_user_allowed_storage_modes(user_id)
+    return storage_mode in get_user_allowed_storage_modes(user_id)
+
+
 def get_user_batch_limit(user_id: int) -> int:
+    custom = get_user_limit_record(user_id).get("batch_limit", 0)
+    if custom:
+        return custom
     return PREMIUM_MAX_BATCH_LINKS if is_premium_user(user_id) else FREE_MAX_BATCH_LINKS
 
 
 def get_user_task_limit(user_id: int) -> int:
+    custom = get_user_limit_record(user_id).get("task_limit", 0)
+    if custom:
+        return custom
     return PREMIUM_MAX_TASKS_PER_USER if is_premium_user(user_id) else FREE_MAX_TASKS_PER_USER
+
 
 
 def cleanup_expired_premium_users():
@@ -1163,12 +1369,17 @@ def setting_mark(value) -> str:
 
 
 def get_upload_mode_label(user_id: int) -> str:
-    mode = get_user_settings(user_id).get("upload_mode", "document")
+    mode = get_user_settings(user_id).get("upload_mode", "media")
     return "Document" if mode == "document" else "Media"
 
 
 def get_settings_marks(user_id: int):
     settings = get_user_settings(user_id)
+    has_replace_rules = bool(
+        settings.get("replace_words_file")
+        or settings.get("replace_words_caption")
+        or settings.get("replace_words")
+    )
     return {
         "upload_mode": "📄" if settings.get("upload_mode") == "document" else "🎞",
         "thumbnail": setting_mark(settings.get("thumbnail_file_id")),
@@ -1184,7 +1395,7 @@ def get_settings_marks(user_id: int):
         "metadata": "✅" if settings.get("metadata_enabled") else "❌",
         "destination": setting_mark(settings.get("upload_destination")),
         "topic_id": setting_mark(settings.get("topic_id")),
-        "replace_words": setting_mark(settings.get("replace_words")),
+        "replace_words": setting_mark(has_replace_rules),
         "index_mode": "✅" if is_index_mode(user_id) else "❌",
         "login": "✅" if has_user_session(user_id) else "❌",
         "batch_mode": "✅" if settings.get("batch_mode") else "❌",
@@ -1364,30 +1575,6 @@ def _expand_tme_range_link(link: str):
     if private_single or private_topic_single or public_single or public_topic_single:
         return [link]
     return []
-    private_range = re.fullmatch(r"(https://t\.me/c/\d+/)(\d+)-(\d+)", link)
-    public_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/)(\d+)-(\d+)", link)
-    private_single = re.fullmatch(r"https://t\.me/c/\d+/\d+", link)
-    public_single = re.fullmatch(r"https://t\.me/[A-Za-z0-9_]+/\d+", link)
-
-    if private_range:
-        prefix = private_range.group(1)
-        start = int(private_range.group(2))
-        end = int(private_range.group(3))
-        if start > end:
-            start, end = end, start
-        return [f"{prefix}{message_id}" for message_id in range(start, end + 1)]
-
-    if public_range:
-        prefix = public_range.group(1)
-        start = int(public_range.group(2))
-        end = int(public_range.group(3))
-        if start > end:
-            start, end = end, start
-        return [f"{prefix}{message_id}" for message_id in range(start, end + 1)]
-
-    if private_single or public_single:
-        return [link]
-    return []
 
 
 def parse_batch_links(raw_text: str):
@@ -1459,34 +1646,45 @@ def delete_user_session(user_id: int):
 # =========================================================
 # TASKS
 # =========================================================
-def get_all_tasks():
-    local_tasks = _load_local_map(TASKS_FILE)
-    normalized_local = {}
-    local_changed = False
-    for task_id, row in local_tasks.items():
+def _set_tasks_cache(data):
+    global _TASKS_CACHE, _TASKS_CACHE_LOADED_AT
+    _TASKS_CACHE = data if isinstance(data, dict) else {}
+    _TASKS_CACHE_LOADED_AT = time.time()
+    return _TASKS_CACHE
+
+
+def _normalize_task_map(data):
+    raw_map = data if isinstance(data, dict) else {}
+    normalized_map = {}
+    changed = False
+    for task_id, row in raw_map.items():
         normalized = _normalize_task_record(task_id, row)
-        normalized_local[str(task_id)] = normalized
+        normalized_map[str(task_id)] = normalized
         if normalized != row:
-            local_changed = True
+            changed = True
+    return normalized_map, changed
+
+
+def _should_use_cached_tasks(force_refresh: bool = False):
+    if force_refresh:
+        return False
+    if not isinstance(_TASKS_CACHE, dict):
+        return False
+    if not _TASKS_CACHE:
+        return True
+    return (time.time() - float(_TASKS_CACHE_LOADED_AT or 0.0)) < _TASK_CACHE_TTL_SECONDS
+
+
+def get_all_tasks(force_refresh: bool = False):
+    if _should_use_cached_tasks(force_refresh=force_refresh):
+        return _TASKS_CACHE
+
+    local_tasks = _load_local_map(TASKS_FILE)
+    normalized_local, local_changed = _normalize_task_map(local_tasks)
     if local_changed:
         _save_local_map(TASKS_FILE, normalized_local)
     else:
         normalized_local = local_tasks
-
-    def _rank(status: str) -> int:
-        order = {
-            "checking": 1,
-            "queued": 2,
-            "processing": 3,
-            "fetching": 4,
-            "downloading": 5,
-            "uploading": 6,
-            "copying": 7,
-            "completed": 8,
-            "failed": 8,
-            "cancelled": 8,
-        }
-        return order.get(str(status or "").lower(), 0)
 
     if _supabase_enabled():
         try:
@@ -1513,34 +1711,50 @@ def get_all_tasks():
                             merged[task_id] = remote_task
                         else:
                             merged[task_id] = local_task
-                    elif _rank(remote_task.get("status")) > _rank(local_task.get("status")):
+                    elif _task_status_rank(remote_task.get("status")) > _task_status_rank(local_task.get("status")):
                         merged[task_id] = remote_task
                     else:
                         merged[task_id] = local_task
 
                 _save_local_map(TASKS_FILE, merged)
-                return merged
+                return _set_tasks_cache(merged)
 
-            return remote
+            return _set_tasks_cache(remote)
         except Exception:
             pass
 
-    return normalized_local
+    return _set_tasks_cache(normalized_local)
 
 
-def save_all_tasks(data):
+def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):
+    global _TASKS_LAST_LOCAL_SAVE_AT, _TASKS_LAST_REMOTE_SYNC_AT
     data = data if isinstance(data, dict) else {}
     normalized = {str(task_id): _normalize_task_record(task_id, row) for task_id, row in data.items()}
-    _save_local_map(TASKS_FILE, normalized)
-    if _supabase_enabled():
+    _set_tasks_cache(normalized)
+
+    now = time.time()
+    has_terminal = any(str((row or {}).get("status", "")).strip().lower() in _TERMINAL_TASK_STATUSES for row in normalized.values())
+    should_write_local = force_local or has_terminal or (now - float(_TASKS_LAST_LOCAL_SAVE_AT or 0.0)) >= _TASK_LOCAL_FLUSH_INTERVAL_SECONDS
+    if should_write_local:
+        _save_local_map(TASKS_FILE, normalized)
+        _TASKS_LAST_LOCAL_SAVE_AT = now
+
+    should_sync_remote = (
+        sync_remote
+        and _supabase_enabled()
+        and (force_local or has_terminal or (now - float(_TASKS_LAST_REMOTE_SYNC_AT or 0.0)) >= _TASK_REMOTE_SYNC_INTERVAL_SECONDS)
+    )
+    if should_sync_remote:
         try:
             rows = []
             for task_id, row in normalized.items():
                 rows.append(_normalize_task_record(task_id, row))
             if rows:
                 _upsert_rows(SUPABASE_TASKS_TABLE, rows, conflict_columns="id")
+                _TASKS_LAST_REMOTE_SYNC_AT = now
         except Exception:
             pass
+    return normalized
 
 
 def set_task(task_id: str, data: dict):
@@ -1548,8 +1762,10 @@ def set_task(task_id: str, data: dict):
     current = all_tasks.get(str(task_id), {})
     if not isinstance(current, dict):
         current = {}
+    previous_status = str(current.get("status", "") or "").strip().lower()
     incoming = dict(data or {})
     current.update(incoming)
+    created = not current.get("created_at")
     if not current.get("created_at"):
         current["created_at"] = _utcnow_naive_iso()
         increment_stat("tasks_created", 1)
@@ -1557,12 +1773,15 @@ def set_task(task_id: str, data: dict):
 
     normalized = _normalize_task_record(task_id, current)
     all_tasks[str(task_id)] = normalized
-    save_all_tasks(all_tasks)
-    touch_last_activity()
+    status = str(normalized.get("status", "") or "").strip().lower()
+    is_terminal = status in _TERMINAL_TASK_STATUSES
+    force_local = created or is_terminal or status != previous_status
+    save_all_tasks(all_tasks, sync_remote=is_terminal, force_local=force_local)
+    touch_last_activity(force=is_terminal)
 
-    if normalized.get("status") == "completed":
+    if status == "completed" and previous_status != "completed":
         increment_stat("tasks_completed", 1)
-    elif normalized.get("status") == "failed":
+    elif status == "failed" and previous_status != "failed":
         increment_stat("tasks_failed", 1)
         log_failed_task(task_id, normalized)
     return normalized
@@ -1579,7 +1798,7 @@ def delete_task(task_id: str):
     task_id = str(task_id)
     tasks = get_all_tasks()
     tasks.pop(task_id, None)
-    save_all_tasks(tasks)
+    save_all_tasks(tasks, sync_remote=True, force_local=True)
     if _supabase_enabled():
         try:
             _delete_rows(SUPABASE_TASKS_TABLE, {"id": task_id})
@@ -1609,7 +1828,7 @@ def cleanup_old_tasks(hours: int = 24):
             tasks.pop(task_id, None)
             changed = True
     if changed:
-        save_all_tasks(tasks)
+        save_all_tasks(tasks, sync_remote=True, force_local=True)
     return changed
 
 
@@ -1653,11 +1872,16 @@ def increment_stat(key: str, amount: int = 1):
     return save_stats(stats)
 
 
-def touch_last_activity():
+def touch_last_activity(force: bool = False):
+    global _LAST_ACTIVITY_SAVE_AT
+    now = time.time()
+    if not force and (now - float(_LAST_ACTIVITY_SAVE_AT or 0.0)) < _LAST_ACTIVITY_FLUSH_INTERVAL_SECONDS:
+        return None
     stats = get_stats()
     if not stats.get("started_at"):
         stats["started_at"] = _utcnow_naive_iso()
     stats["last_activity_at"] = _utcnow_naive_iso()
+    _LAST_ACTIVITY_SAVE_AT = now
     return save_stats(stats)
 
 
@@ -1746,6 +1970,7 @@ def hydrate_local_files():
         (STATS_FILE, DEFAULT_STATS),
         (FAILED_TASKS_FILE, {}),
         (BROADCAST_LOG_FILE, []),
+        (USER_LIMITS_FILE, {}),
     ]:
         if not os.path.exists(path):
             save_json(path, default)
@@ -1760,6 +1985,78 @@ def initialize_storage():
     sync_premium_stats()
 
 
+
+def get_detailed_stats():
+    stats = get_stats()
+    users = get_all_users_sorted()
+    settings_map = get_all_settings()
+    tasks = get_all_tasks()
+    now = _now_utc()
+    active_users = 0
+    for row in users:
+        parsed = _parse_iso(row.get("last_seen", ""))
+        if parsed and (now - parsed) <= timedelta(days=7):
+            active_users += 1
+    storage_counts = {"telegram": 0, "gdrive": 0, "rclone": 0}
+    for uid in settings_map:
+        mode = str(_normalize_settings(settings_map.get(uid, {})).get("storage_mode", "telegram")).lower()
+        storage_counts[mode] = storage_counts.get(mode, 0) + 1
+    task_counts = {"total": 0, "completed": 0, "failed": 0, "running": 0, "cancelled": 0, "queued": 0, "batch": 0}
+    for task in tasks.values():
+        task_counts["total"] += 1
+        status = str(task.get("status", "") or "").strip().lower()
+        if status in _ACTIVE_TASK_STATUSES:
+            task_counts["running"] += 1
+        elif status in task_counts:
+            task_counts[status] += 1
+        if str(task.get("mode", "") or "").strip().lower() == "batch":
+            task_counts["batch"] += 1
+    return {
+        "stats": stats,
+        "total_users": len(users),
+        "recent_users": get_recent_users(10),
+        "active_users": active_users,
+        "logged_in_users": len([uid for uid in settings_map if has_user_session(int(uid))]),
+        "premium_users": sync_premium_stats(),
+        "storage_counts": storage_counts,
+        "task_counts": task_counts,
+    }
+
+
+def analyze_batch_input(raw_text: str):
+    raw_text = str(raw_text or "")
+    tokens = []
+    invalid_tokens = []
+    for line in raw_text.splitlines():
+        for part in line.split():
+            token = str(part or "").strip()
+            if not token:
+                continue
+            expanded = _expand_tme_range_link(token)
+            if expanded:
+                tokens.extend(expanded)
+            elif token.startswith("http://") or token.startswith("https://"):
+                invalid_tokens.append(token)
+    links = parse_batch_links(raw_text)
+    summary = {
+        "valid_links": len(links),
+        "invalid_links": len(invalid_tokens),
+        "public_links": 0,
+        "private_links": 0,
+        "topic_links": 0,
+    }
+    for link in links:
+        value = str(link)
+        if "/c/" in value:
+            summary["private_links"] += 1
+        else:
+            summary["public_links"] += 1
+        if re.search(r"https?://(?:t|telegram)\.me/(?:c/\d+/\d+/\d+|[A-Za-z0-9_]+/\d+/\d+)", value):
+            summary["topic_links"] += 1
+    summary["invalid_tokens"] = invalid_tokens[:20]
+    return summary
+
+
 def get_admin_overview(limit_recent_users: int = 5):
     return {
         "total_users": user_count(),
@@ -1769,4 +2066,51 @@ def get_admin_overview(limit_recent_users: int = 5):
         "running_tasks": len([task for task in get_all_tasks().values() if _is_countable_running_task(task)]),
         "failed_tasks": len(get_failed_tasks()),
         "stats": get_stats(),
+    }
+
+
+# =========================================================
+# V13/V14/V15 HELPERS (APPENDED OVERRIDES)
+# =========================================================
+def get_user_storage_mode(user_id: int) -> str:
+    return str(get_user_settings(user_id).get("storage_mode", "telegram") or "telegram").strip().lower()
+
+
+def get_user_telegram_upload_mode(user_id: int) -> str:
+    return str(get_user_settings(user_id).get("telegram_upload_mode", get_user_settings(user_id).get("upload_mode", "media")) or "media").strip().lower()
+
+
+def get_settings_marks(user_id: int):
+    settings = get_user_settings(user_id)
+    storage_mode = str(settings.get("storage_mode", "telegram") or "telegram").strip().lower()
+    telegram_mode = str(settings.get("telegram_upload_mode", settings.get("upload_mode", "media")) or "media").strip().lower()
+    has_replace_rules = bool(
+        settings.get("replace_words_file")
+        or settings.get("replace_words_caption")
+        or settings.get("replace_words")
+    )
+    return {
+        "storage_mode": {"telegram": "📨", "gdrive": "☁️", "rclone": "🗂"}.get(storage_mode, "📨"),
+        "upload_mode": "📄" if telegram_mode == "document" else "🎞",
+        "thumbnail": setting_mark(settings.get("thumbnail_file_id")),
+        "caption": "✅" if settings.get("caption_enabled") and settings.get("caption_text") else "❌",
+        "prefix": setting_mark(settings.get("prefix")),
+        "suffix": setting_mark(settings.get("suffix")),
+        "auto_rename": setting_mark(settings.get("auto_rename") or settings.get("rename_template") or settings.get("filename_prefix") or settings.get("filename_suffix")),
+        "metadata": "✅" if settings.get("metadata_enabled") else "❌",
+        "destination": setting_mark(settings.get("upload_destination")),
+        "topic_id": setting_mark(settings.get("topic_id")),
+        "replace_words": setting_mark(has_replace_rules),
+        "index_mode": "✅" if settings.get("index_mode") else "❌",
+        "batch_mode": "✅" if settings.get("batch_mode") else "❌",
+        "login": "✅" if has_user_session(user_id) else "❌",
+        "premium": "💎" if is_premium_user(user_id) else "🆓",
+        "gdrive_token": setting_mark(settings.get("gdrive_token_path")),
+        "gdrive_folder": setting_mark(settings.get("gdrive_folder_id")),
+        "gdrive": setting_mark(settings.get("gdrive_folder_id") and settings.get("gdrive_token_path")),
+        "rclone_config": setting_mark(settings.get("rclone_config_path")),
+        "rclone_path": setting_mark(settings.get("rclone_remote_path")),
+        "rclone": setting_mark(settings.get("rclone_remote_path") and settings.get("rclone_config_path")),
+        "personal_bot": setting_mark(settings.get("personal_bot_token")),
+        "route_template": setting_mark(settings.get("route_template") and str(settings.get("route_template")) != "off"),
     }

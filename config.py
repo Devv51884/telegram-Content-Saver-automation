@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+ENV_FILE = BASE_DIR / ".env"
+
+load_dotenv(ENV_FILE if ENV_FILE.exists() else None)
 
 
 # =========================================================
@@ -9,6 +13,16 @@ load_dotenv()
 # =========================================================
 def _get_str(name: str, default: str = "") -> str:
     return str(os.getenv(name, default) or "").strip()
+
+
+def _resolve_path(value: str, default: str = "") -> str:
+    value = str(value or default or "").strip()
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return str(path.resolve())
 
 
 def _get_int(name: str, default: int = 0) -> int:
@@ -54,11 +68,14 @@ def _parse_chat_target(value: str):
     return value
 
 
-def _normalize_upload_mode(value: str, default: str = "document") -> str:
+def _normalize_upload_mode(value: str, default: str = "media") -> str:
     value = str(value or default).strip().lower()
-    if value in {"media", "video", "photo"}:
+    if value in {"document", "doc", "file"}:
+        return "document"
+    if value in {"media", "video", "photo", "audio"}:
         return "media"
-    return "document"
+    default = str(default or "media").strip().lower()
+    return "document" if default == "document" else "media"
 
 
 def _sanitize_database_mode(value: str, default: str = "hybrid") -> str:
@@ -93,7 +110,7 @@ API_HASH = _get_str("API_HASH", "")
 BOT_TOKEN = _get_str("BOT_TOKEN", "")
 STRING_SESSION = _get_str("STRING_SESSION", "")
 SESSION_NAME = _get_str("SESSION_NAME", "code_devil_v12_bot")
-SESSION_STORE_FILE = _get_str("SESSION_STORE_FILE", "data/user_sessions.json")
+SESSION_STORE_FILE = _resolve_path(_get_str("SESSION_STORE_FILE", "data/user_sessions.json"))
 
 
 # =========================================================
@@ -114,25 +131,30 @@ if OWNER_ID:
 # =========================================================
 # PATHS / STORAGE
 # =========================================================
-DATA_DIR = _get_str("DATA_DIR", "data")
-TEMP_DIR = _get_str("TEMP_DIR", "temp")
-CACHE_DIR = _get_str("CACHE_DIR", os.path.join(DATA_DIR, "cache"))
-BACKUP_DIR = _get_str("BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
-EXPORT_DIR = _get_str("EXPORT_DIR", os.path.join(DATA_DIR, "exports"))
+DATA_DIR = _resolve_path(_get_str("DATA_DIR", "data"))
+TEMP_DIR = _resolve_path(_get_str("TEMP_DIR", "temp"))
+CACHE_DIR = _resolve_path(_get_str("CACHE_DIR", os.path.join(DATA_DIR, "cache")))
+BACKUP_DIR = _resolve_path(_get_str("BACKUP_DIR", os.path.join(DATA_DIR, "backups")))
+EXPORT_DIR = _resolve_path(_get_str("EXPORT_DIR", os.path.join(DATA_DIR, "exports")))
 
-SETTINGS_FILE = _get_str("SETTINGS_FILE", os.path.join(DATA_DIR, "user_settings.json"))
-STATE_FILE = _get_str("STATE_FILE", os.path.join(DATA_DIR, "user_state.json"))
-USERS_FILE = _get_str("USERS_FILE", os.path.join(DATA_DIR, "users.json"))
-BANNED_FILE = _get_str("BANNED_FILE", os.path.join(DATA_DIR, "banned_users.json"))
-INDEX_FILE = _get_str("INDEX_FILE", os.path.join(DATA_DIR, "index_store.json"))
-INDEX_STATE_FILE = _get_str("INDEX_STATE_FILE", os.path.join(DATA_DIR, "index_state.json"))
-TASKS_FILE = _get_str("TASKS_FILE", os.path.join(DATA_DIR, "tasks.json"))
-PREMIUM_FILE = _get_str("PREMIUM_FILE", os.path.join(DATA_DIR, "premium_users.json"))
-STATS_FILE = _get_str("STATS_FILE", os.path.join(DATA_DIR, "stats.json"))
-BROADCAST_LOG_FILE = _get_str("BROADCAST_LOG_FILE", os.path.join(DATA_DIR, "broadcast_log.json"))
-FAILED_TASKS_FILE = _get_str("FAILED_TASKS_FILE", os.path.join(DATA_DIR, "failed_tasks.json"))
-DESTINATIONS_FILE = _get_str("DESTINATIONS_FILE", os.path.join(DATA_DIR, "destinations.json"))
-AUDIT_LOG_FILE = _get_str("AUDIT_LOG_FILE", os.path.join(DATA_DIR, "task_audit_log.json"))
+SETTINGS_FILE = _resolve_path(_get_str("SETTINGS_FILE", os.path.join(DATA_DIR, "user_settings.json")))
+STATE_FILE = _resolve_path(_get_str("STATE_FILE", os.path.join(DATA_DIR, "user_state.json")))
+USERS_FILE = _resolve_path(_get_str("USERS_FILE", os.path.join(DATA_DIR, "users.json")))
+BANNED_FILE = _resolve_path(_get_str("BANNED_FILE", os.path.join(DATA_DIR, "banned_users.json")))
+INDEX_FILE = _resolve_path(_get_str("INDEX_FILE", os.path.join(DATA_DIR, "index_store.json")))
+INDEX_STATE_FILE = _resolve_path(_get_str("INDEX_STATE_FILE", os.path.join(DATA_DIR, "index_state.json")))
+TASKS_FILE = _resolve_path(_get_str("TASKS_FILE", os.path.join(DATA_DIR, "tasks.json")))
+PREMIUM_FILE = _resolve_path(_get_str("PREMIUM_FILE", os.path.join(DATA_DIR, "premium_users.json")))
+STATS_FILE = _resolve_path(_get_str("STATS_FILE", os.path.join(DATA_DIR, "stats.json")))
+BROADCAST_LOG_FILE = _resolve_path(_get_str("BROADCAST_LOG_FILE", os.path.join(DATA_DIR, "broadcast_log.json")))
+FAILED_TASKS_FILE = _resolve_path(_get_str("FAILED_TASKS_FILE", os.path.join(DATA_DIR, "failed_tasks.json")))
+DESTINATIONS_FILE = _resolve_path(_get_str("DESTINATIONS_FILE", os.path.join(DATA_DIR, "destinations.json")))
+AUDIT_LOG_FILE = _resolve_path(_get_str("AUDIT_LOG_FILE", os.path.join(DATA_DIR, "task_audit_log.json")))
+USER_LIMITS_FILE = _resolve_path(_get_str("USER_LIMITS_FILE", os.path.join(DATA_DIR, "user_limits.json")))
+GDRIVE_TOKENS_DIR = _resolve_path(_get_str("GDRIVE_TOKENS_DIR", os.path.join(DATA_DIR, "gdrive_tokens")))
+RCLONE_CONFIGS_DIR = _resolve_path(_get_str("RCLONE_CONFIGS_DIR", os.path.join(DATA_DIR, "rclone_configs")))
+GDRIVE_CREDENTIALS_FILE = _resolve_path(_get_str("GDRIVE_CREDENTIALS_FILE", os.path.join(DATA_DIR, "credentials.json")))
+RCLONE_BIN = _get_str("RCLONE_BIN", "rclone")
 
 
 # =========================================================
@@ -252,7 +274,7 @@ SHOW_UPDATED_AT_IN_TASK_CARD = _get_bool("SHOW_UPDATED_AT_IN_TASK_CARD", True)
 # =========================================================
 # USER EXPERIENCE / UI
 # =========================================================
-DEFAULT_UPLOAD_MODE = _normalize_upload_mode(_get_str("DEFAULT_UPLOAD_MODE", "document"))
+DEFAULT_UPLOAD_MODE = _normalize_upload_mode(_get_str("DEFAULT_UPLOAD_MODE", "media"))
 SHOW_PLAN_IN_START = _get_bool("SHOW_PLAN_IN_START", True)
 SHOW_LIMITS_IN_SETTINGS = _get_bool("SHOW_LIMITS_IN_SETTINGS", True)
 ENABLE_DYNAMIC_UPLOAD_MODE = _get_bool("ENABLE_DYNAMIC_UPLOAD_MODE", True)
@@ -275,6 +297,14 @@ ENABLE_RECENT_USERS_PANEL = _get_bool("ENABLE_RECENT_USERS_PANEL", True)
 ENABLE_TASK_DEBUG_PANEL = _get_bool("ENABLE_TASK_DEBUG_PANEL", True)
 ENABLE_DESTINATIONS_PANEL = _get_bool("ENABLE_DESTINATIONS_PANEL", True)
 
+
+# =========================================================
+# STORAGE PLANS / ROUTING
+# =========================================================
+FREE_STORAGE_MODES = [item.strip().lower() for item in _get_str("FREE_STORAGE_MODES", "telegram").split(",") if item.strip()] or ["telegram"]
+PREMIUM_STORAGE_MODES = [item.strip().lower() for item in _get_str("PREMIUM_STORAGE_MODES", "telegram,gdrive,rclone").split(",") if item.strip()] or ["telegram", "gdrive", "rclone"]
+PRO_STORAGE_MODES = [item.strip().lower() for item in _get_str("PRO_STORAGE_MODES", "telegram,gdrive,rclone,personal_bot").split(",") if item.strip()] or ["telegram", "gdrive", "rclone", "personal_bot"]
+DEFAULT_STORAGE_MODE = _get_str("DEFAULT_STORAGE_MODE", "telegram").strip().lower() or "telegram"
 
 # =========================================================
 # WEB / HEALTH / DEPLOYMENT
@@ -338,5 +368,5 @@ def get_plan_file_size_limit_mb(is_premium: bool = False) -> int:
 # =========================================================
 # CREATE REQUIRED FOLDERS
 # =========================================================
-for path in {DATA_DIR, TEMP_DIR, CACHE_DIR, BACKUP_DIR, EXPORT_DIR}:
+for path in {DATA_DIR, TEMP_DIR, CACHE_DIR, BACKUP_DIR, EXPORT_DIR, GDRIVE_TOKENS_DIR, RCLONE_CONFIGS_DIR}:
     os.makedirs(path, exist_ok=True)

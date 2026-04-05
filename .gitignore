@@ -1,4 +1,28 @@
-venv/
+# Secrets / local env
 .env
+.env.*
+!.env.example
+
+# Virtual envs
+venv/
+.venv/
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Sessions / runtime auth
+*.session
+*.session-journal
+
+# Runtime temp + local generated assets
+temp/
+data/cache/
+data/backups/
+data/exports/
+data/gdrive_tokens/
+data/rclone_configs/
+*.log
+*.tmp

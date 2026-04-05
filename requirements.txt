@@ -14,3 +14,8 @@ postgrest
 
 setuptools
 wheel
+
+# V13/V14/V15 Additions
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
