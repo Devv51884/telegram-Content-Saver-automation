@@ -36,6 +36,7 @@ from config import (
     SYNC_LOCAL_TO_SUPABASE,
     SUPABASE_URL,
     SUPABASE_KEY,
+    SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_TIMEOUT,
     SUPABASE_SCHEMA,
     SUPABASE_USERS_TABLE,
@@ -375,13 +376,18 @@ def _format_destination_display(destination: str, topic_id: str = "") -> str:
 # SUPABASE HELPERS
 # =========================================================
 def _supabase_enabled() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_KEY)
+    return bool(SUPABASE_URL and (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY))
+
+
+def _supabase_auth_key() -> str:
+    return str(SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY or "").strip()
 
 
 def _supabase_headers(prefer: str = "return=representation"):
+    auth_key = _supabase_auth_key()
     return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": auth_key,
+        "Authorization": f"Bearer {auth_key}",
         "Content-Type": "application/json",
         "Accept-Profile": SUPABASE_SCHEMA,
         "Content-Profile": SUPABASE_SCHEMA,
@@ -1724,6 +1730,29 @@ def get_all_tasks(force_refresh: bool = False):
             pass
 
     return _set_tasks_cache(normalized_local)
+
+
+def sync_local_persistent_data_to_supabase():
+    if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
+        return {"enabled": False, "synced": []}
+
+    synced = []
+    sync_jobs = [
+        (USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record, "users"),
+        (SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record, "settings"),
+        (STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record, "state"),
+        (PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record, "premium"),
+        (TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record, "tasks"),
+    ]
+
+    for path, table, key_name, normalizer, label in sync_jobs:
+        try:
+            _sync_full_local_map_to_supabase(path, table, key_name, normalizer)
+            synced.append(label)
+        except Exception:
+            pass
+
+    return {"enabled": True, "synced": synced}
 
 
 def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):

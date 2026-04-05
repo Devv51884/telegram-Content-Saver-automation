@@ -81,6 +81,21 @@
     "login_password": "",
     "phone": "",
     "phone_code_hash": "",
-    "last_updated_at": "2026-04-05T19:58:47.168695+00:00"
+    "last_updated_at": "2026-04-05T20:23:38.319849+00:00",
+    "batch_board": {
+      "batch_key": "batch-1",
+      "tasks": {
+        "task-1": {
+          "status": "cancelled"
+        },
+        "task-2": {
+          "status": "cancelled"
+        }
+      },
+      "current_task_id": "task-1",
+      "status": "Cancelling",
+      "cancel_all_requested": true,
+      "note": "Batch cancelled by user"
+    }
   }
 }

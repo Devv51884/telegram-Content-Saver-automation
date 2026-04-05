@@ -8,6 +8,7 @@ from pyrogram import idle
 
 from app import run_web, set_runtime_state
 from bot import app, ensure_background_workers_started
+from storage import sync_local_persistent_data_to_supabase
 
 
 BOT_STARTUP_MODE = "web+bot"
@@ -20,6 +21,13 @@ def start_bot():
     try:
         app.start()
         app.loop.run_until_complete(ensure_background_workers_started(app))
+        try:
+            sync_info = sync_local_persistent_data_to_supabase()
+            if sync_info.get("enabled"):
+                synced = ", ".join(sync_info.get("synced") or [])
+                print(f"☁️ Startup Supabase sync: {synced or 'no local maps'}")
+        except Exception as sync_exc:
+            print(f"⚠️ Startup Supabase sync skipped: {sync_exc}")
 
         me = app.get_me()
         username = me.username if me else "unknown"
