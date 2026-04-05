@@ -19,6 +19,7 @@ __pycache__/
 
 # Runtime temp + local generated assets
 temp/
+data/*.json
 data/cache/
 data/backups/
 data/exports/
