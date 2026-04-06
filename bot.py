@@ -5,7 +5,6 @@ import re
 import uuid
 import time
 import asyncio
-import tempfile
 import subprocess
 import importlib.util
 import sys
@@ -137,8 +136,11 @@ from storage import (
     add_index_entry,
     ban_user,
     banned_count,
+    cleanup_runtime_artifacts,
     clear_user_state,
+    get_caption_settings_for_mode,
     get_recent_users,
+    get_storage_runtime_status,
     get_user_settings,
     get_user_state,
     increase_index_user_count,
@@ -192,6 +194,10 @@ from storage import (
     user_can_use_storage_mode,
     get_user_storage_mode,
     get_user_telegram_upload_mode,
+    create_backup_snapshot,
+    restore_backup_snapshot,
+    get_supabase_status,
+    sync_local_persistent_data_to_supabase,
 )
 
 app = Client(
@@ -226,6 +232,7 @@ TASK_QUEUE: asyncio.Queue = asyncio.Queue()
 TASK_WORKERS = []
 TASK_WORKERS_STARTED = False
 TASK_WORKER_LOCK = None
+STORAGE_MAINTENANCE_TASK = None
 
 
 def ensure_shared_user_site_packages():
@@ -758,12 +765,13 @@ def ensure_valid_downloaded_file(file_path: str):
     return file_path
 
 
-def build_final_caption(source_msg, settings: dict, index_no: int = 0):
+def build_final_caption(source_msg, settings: dict, index_no: int = 0, storage_mode: str | None = None):
     context = build_template_context(source_msg, settings, index_no=index_no)
     caption = source_msg.caption or ""
+    caption_state = get_caption_settings_for_mode(settings, storage_mode)
 
-    if settings.get("caption_enabled") and settings.get("caption_text"):
-        caption = render_template(settings.get("caption_text", ""), context)
+    if caption_state.get("enabled") and caption_state.get("text"):
+        caption = render_template(caption_state.get("text", ""), context)
 
     caption = apply_replace_rules(caption, get_caption_replace_rules(settings))
 
@@ -779,12 +787,13 @@ def build_final_caption(source_msg, settings: dict, index_no: int = 0):
     return caption
 
 
-def build_final_text(text: str, source_msg, settings: dict, index_no: int = 0):
+def build_final_text(text: str, source_msg, settings: dict, index_no: int = 0, storage_mode: str | None = None):
     context = build_template_context(source_msg, settings, index_no=index_no)
     value = text or ""
+    caption_state = get_caption_settings_for_mode(settings, storage_mode)
 
-    if settings.get("caption_enabled") and settings.get("caption_text"):
-        value = render_template(settings.get("caption_text", value), context)
+    if caption_state.get("enabled") and caption_state.get("text"):
+        value = render_template(caption_state.get("text", value), context)
 
     value = apply_replace_rules(value, get_caption_replace_rules(settings))
 
@@ -835,6 +844,37 @@ def build_final_filename(original_filename: str, settings: dict, index_no: int =
     new_base = apply_replace_rules(new_base, get_file_replace_rules(settings))
     new_base = sanitize_filename(new_base)
     return f"{new_base}{ext}"
+
+
+def build_storage_annotation(source_msg, settings: dict, index_no: int = 0, storage_mode: str | None = None) -> str:
+    settings = settings or {}
+    parts = []
+
+    if is_media_message(source_msg):
+        caption_value = str(build_final_caption(source_msg, settings, index_no=index_no, storage_mode=storage_mode) or "").strip()
+    else:
+        raw_text = str(getattr(source_msg, "text", "") or getattr(source_msg, "caption", "") or "")
+        caption_value = str(build_final_text(raw_text, source_msg, settings, index_no=index_no, storage_mode=storage_mode) or "").strip()
+
+    if caption_value:
+        parts.append(caption_value)
+
+    if settings.get("metadata_enabled"):
+        metadata_lines = []
+        mapping = [
+            ("Video Title", "metadata_video_title"),
+            ("Video Author", "metadata_video_author"),
+            ("Audio Title", "metadata_audio_title"),
+            ("Subtitle Title", "metadata_subtitle_title"),
+        ]
+        for label, key in mapping:
+            value = str(settings.get(key, "") or "").strip()
+            if value:
+                metadata_lines.append(f"{label}: {value}")
+        if metadata_lines:
+            parts.append("\n".join(metadata_lines))
+
+    return "\n\n".join([part for part in parts if str(part or "").strip()]).strip()
 
 
 def touch_task(task_id: str, payload: dict):
@@ -995,6 +1035,9 @@ def get_primary_telegram_settings(settings: dict) -> dict:
         tg_mode = "media"
     cloned["telegram_upload_mode"] = tg_mode
     cloned["upload_mode"] = tg_mode
+    telegram_caption = get_caption_settings_for_mode(cloned, "telegram")
+    cloned["caption_enabled"] = bool(telegram_caption.get("enabled"))
+    cloned["caption_text"] = str(telegram_caption.get("text") or "")
     return cloned
 
 
@@ -1063,10 +1106,10 @@ async def validate_personal_bot_token(user_id: int, token: str):
             pass
 
 
-def create_temp_text_file(source_msg, settings: dict, index_no: int = 0):
+def create_temp_text_file(source_msg, settings: dict, index_no: int = 0, storage_mode: str | None = None):
     os.makedirs(TEMP_DIR, exist_ok=True)
     path = os.path.join(TEMP_DIR, f"text_{uuid.uuid4().hex[:8]}.txt")
-    value = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no)
+    value = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no, storage_mode=storage_mode)
     Path(path).write_text(ensure_non_empty_text(value), encoding="utf-8")
     return path
 
@@ -1079,24 +1122,27 @@ def _build_gdrive_service(token_path: str):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def _upload_file_to_gdrive_sync(token_path: str, file_path: str, folder_id: str):
+def _upload_file_to_gdrive_sync(token_path: str, file_path: str, folder_id: str, description: str = ""):
     from googleapiclient.http import MediaFileUpload
     service = _build_gdrive_service(token_path)
     metadata = {"name": os.path.basename(file_path)}
     if folder_id:
         metadata["parents"] = [folder_id]
+    if str(description or "").strip():
+        metadata["description"] = str(description).strip()
     media = MediaFileUpload(file_path, resumable=False)
-    return service.files().create(body=metadata, media_body=media, fields="id,name,webViewLink").execute()
+    return service.files().create(body=metadata, media_body=media, fields="id,name,description,webViewLink").execute()
 
 
-async def upload_file_to_gdrive(user_id: int, settings: dict, file_path: str):
+async def upload_file_to_gdrive(user_id: int, settings: dict, file_path: str, source_msg=None, index_no: int = 0):
     token_path = str(settings.get("gdrive_token_path", "") or "").strip()
     folder_id = str(settings.get("gdrive_folder_id", "") or "").strip()
     if not token_path or not os.path.exists(token_path):
         raise RuntimeError("Google Drive token.pickle missing hai.")
     if not folder_id:
         raise RuntimeError("Google Drive folder ID set nahi hai.")
-    result = await asyncio.to_thread(_upload_file_to_gdrive_sync, token_path, file_path, folder_id)
+    description = build_storage_annotation(source_msg, settings, index_no=index_no, storage_mode="gdrive") if source_msg else ""
+    result = await asyncio.to_thread(_upload_file_to_gdrive_sync, token_path, file_path, folder_id, description)
     update_user_settings(user_id, {"gdrive_last_file_link": str(result.get("webViewLink", "") or result.get("id", ""))})
     return result
 
@@ -1114,7 +1160,7 @@ async def validate_gdrive_settings_for_user(settings: dict):
     return await asyncio.to_thread(_validate)
 
 
-async def upload_file_to_rclone(user_id: int, settings: dict, file_path: str):
+async def upload_file_to_rclone(user_id: int, settings: dict, file_path: str, source_msg=None, index_no: int = 0):
     config_path = str(settings.get("rclone_config_path", "") or "").strip()
     remote_path = str(settings.get("rclone_remote_path", "") or "").strip()
     if not config_path or not os.path.exists(config_path):
@@ -1129,7 +1175,31 @@ async def upload_file_to_rclone(user_id: int, settings: dict, file_path: str):
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
         raise RuntimeError((stderr or stdout or b"rclone failed").decode("utf-8", "ignore")[:500])
+
+    sidecar_target = ""
+    annotation = build_storage_annotation(source_msg, settings, index_no=index_no, storage_mode="rclone") if source_msg else ""
+    if annotation and source_msg and is_media_message(source_msg):
+        sidecar_path = os.path.join(TEMP_DIR, f"{os.path.basename(file_path)}.caption.txt")
+        sidecar_target = f"{target}.caption.txt"
+        try:
+            Path(sidecar_path).write_text(annotation, encoding="utf-8")
+            sidecar_proc = await asyncio.create_subprocess_exec(
+                getattr(cfg, "RCLONE_BIN", "rclone"), "copyto", sidecar_path, sidecar_target, "--config", config_path,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            side_stdout, side_stderr = await sidecar_proc.communicate()
+            if sidecar_proc.returncode != 0:
+                raise RuntimeError((side_stderr or side_stdout or b"rclone caption sidecar failed").decode("utf-8", "ignore")[:500])
+        finally:
+            if os.path.exists(sidecar_path):
+                try:
+                    os.remove(sidecar_path)
+                except Exception:
+                    pass
+
     update_user_settings(user_id, {"rclone_last_file_path": target})
+    if sidecar_target:
+        return {"path": target, "caption_sidecar": sidecar_target}
     return {"path": target}
 
 
@@ -1176,7 +1246,7 @@ async def validate_current_destination_settings(client, settings: dict):
 async def upload_to_storage_target(client, task_id: str, source_msg, settings: dict, user_id: int, file_path: str, storage_mode: str, index_no: int = 0, fetch_mode: str = "bot", user_client=None):
     storage_mode = normalize_storage_mode(storage_mode)
     if storage_mode == "gdrive":
-        info = await upload_file_to_gdrive(user_id, settings, file_path)
+        info = await upload_file_to_gdrive(user_id, settings, file_path, source_msg=source_msg, index_no=index_no)
         delivered_to = ["gdrive"]
         delivery_errors = []
         if LOG_CHANNEL:
@@ -1188,7 +1258,7 @@ async def upload_to_storage_target(client, task_id: str, source_msg, settings: d
                 delivery_errors.append(f"{LOG_CHANNEL}: {e}")
         return delivered_to, delivery_errors, info
     if storage_mode == "rclone":
-        info = await upload_file_to_rclone(user_id, settings, file_path)
+        info = await upload_file_to_rclone(user_id, settings, file_path, source_msg=source_msg, index_no=index_no)
         delivered_to = ["rclone"]
         delivery_errors = []
         if LOG_CHANNEL:
@@ -1223,7 +1293,7 @@ async def send_cached_media_to_target(client, target, source_msg, settings: dict
     target = normalize_target(target)
     await ensure_target_peer_ready(client, target)
     topic_id = safe_topic_id(settings.get("topic_id", ""))
-    caption = build_final_caption(source_msg, settings, index_no=index_no)
+    caption = build_final_caption(source_msg, settings, index_no=index_no, storage_mode="telegram")
     caption = caption if str(caption or "").strip() else None
     caption_parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html")) if caption else None
     file_id = get_message_file_id(source_msg)
@@ -2181,14 +2251,6 @@ TELEGRAM_ONLY_SETTINGS_CALLBACKS = {
     "toggle_thumbnail_enabled",
     "set_thumbnail_photo",
     "remove_thumbnail",
-    "show_caption",
-    "toggle_caption_enabled",
-    "show_caption_index_settings",
-    "toggle_caption_index_enabled",
-    "set_caption_index_padding",
-    "set_caption_index_start",
-    "set_caption_text",
-    "remove_caption",
     "show_destination",
     "set_destination",
     "remove_destination",
@@ -2691,7 +2753,7 @@ async def ask_set_destination(message, info_message=None, settings: dict | None 
 
 
 async def ensure_background_workers_started(client):
-    global TASK_WORKERS_STARTED, TASK_WORKER_LOCK
+    global TASK_WORKERS_STARTED, TASK_WORKER_LOCK, STORAGE_MAINTENANCE_TASK
     if TASK_WORKERS_STARTED:
         return
 
@@ -2706,8 +2768,22 @@ async def ensure_background_workers_started(client):
         for idx in range(worker_count):
             worker = asyncio.create_task(task_worker(client, idx + 1))
             TASK_WORKERS.append(worker)
+        if bool(getattr(cfg, "ENABLE_STORAGE_MAINTENANCE", True)) and STORAGE_MAINTENANCE_TASK is None:
+            STORAGE_MAINTENANCE_TASK = asyncio.create_task(storage_maintenance_worker())
         TASK_WORKERS_STARTED = True
         print(f"🧵 Task workers started: {worker_count}")
+
+
+async def storage_maintenance_worker():
+    interval = max(60.0, float(getattr(cfg, "STORAGE_MAINTENANCE_INTERVAL_SECONDS", 900) or 900))
+    while True:
+        try:
+            cleanup_info = cleanup_runtime_artifacts()
+            if any(cleanup_info.values()):
+                debug_log(f"Storage maintenance: {cleanup_info}")
+        except Exception as exc:
+            debug_log(f"Storage maintenance failed: {exc}")
+        await asyncio.sleep(interval)
 
 
 async def task_worker(client, worker_id: int):
@@ -3639,7 +3715,7 @@ async def get_thumbnail_temp_path(client, settings: dict, task_id: str = ""):
 async def upload_file_to_target(client, task_id: str, target, file_path: str, source_msg, settings: dict, index_no: int = 0):
     target = normalize_target(target)
     ensure_task_not_cancelled(task_id)
-    caption = build_final_caption(source_msg, settings, index_no=index_no)
+    caption = build_final_caption(source_msg, settings, index_no=index_no, storage_mode="telegram")
     caption = caption if str(caption or "").strip() else None
     caption_parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html")) if caption else None
     topic_id = safe_topic_id(settings.get("topic_id", ""))
@@ -3772,7 +3848,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
 async def send_text_to_target(client, target, source_msg, settings: dict, index_no: int = 0):
     target = normalize_target(target)
     topic_id = safe_topic_id(settings.get("topic_id", ""))
-    raw_text = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no)
+    raw_text = build_final_text(source_msg.text or source_msg.caption or "", source_msg, settings, index_no=index_no, storage_mode="telegram")
     final_text = ensure_non_empty_text(raw_text)
     parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html")) if str(raw_text or "").strip() else None
     result = await client.send_message(
@@ -3913,7 +3989,7 @@ async def process_source_message_transfer(client, user_id: int, message, source_
                     index_no=user_index_no,
                 )
             else:
-                text_path = create_temp_text_file(source_msg, settings, index_no=user_index_no)
+                text_path = create_temp_text_file(source_msg, settings, index_no=user_index_no, storage_mode=storage_mode)
                 try:
                     touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": f"{storage_mode.title()} text route", "is_visible": True})
                     await update_task_status_message(client, task_id)
@@ -4198,6 +4274,16 @@ async def process_link_task(client, user_id: int, message, link_text: str, batch
 
 async def enqueue_direct_message_task(client, user_id: int, message):
     await ensure_background_workers_started(client)
+
+    active_state = get_user_state(user_id)
+    if active_state == "set_thumbnail_photo":
+        if getattr(message, "photo", None):
+            update_user_settings(user_id, {"thumbnail_file_id": message.photo.file_id, "thumbnail_enabled": True})
+            clear_user_state(user_id)
+            await message.reply_text("✅ Custom thumbnail save ho gaya.\n\n/settings bhejo dekhne ke liye.")
+            return False
+        await message.reply_text("❌ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho.")
+        return False
 
     settings = get_user_settings(user_id)
     storage_mode = normalize_storage_mode(settings.get("storage_mode", "telegram"))
@@ -4501,6 +4587,117 @@ async def handle_admin_commands(client, message, lowered: str):
 
     if lowered.startswith("/stats"):
         await message.reply_text(admin_stats_text(get_detailed_stats()), disable_web_page_preview=True)
+        return True
+
+    if lowered.startswith("/supabase_status"):
+        status = get_supabase_status()
+        schema_state = status.get("schema_state", {}) or {}
+        await message.reply_text(
+            "\n".join([
+                "☁️ **Supabase Status**",
+                "",
+                f"Enabled: **{'Yes' if status.get('enabled') else 'No'}**",
+                f"Project URL: **{'Present' if status.get('has_url') else 'Missing'}**",
+                f"API Key: **{'Present' if status.get('has_key') else 'Missing'}**",
+                f"Key Role: **{status.get('key_role', 'unknown')}**",
+                f"DB URL: **{'Present' if status.get('has_db_url') else 'Missing'}**",
+                f"Schema Ready: **{'Yes' if schema_state.get('ready') else 'No'}**",
+                f"Message: `{schema_state.get('message', '')}`",
+            ]),
+            disable_web_page_preview=True,
+        )
+        return True
+
+    if lowered.startswith("/storage_status"):
+        status = get_storage_runtime_status()
+        data_dir = status.get("data_dir", {}) or {}
+        temp_dir = status.get("temp_dir", {}) or {}
+        backup_dir = status.get("backup_dir", {}) or {}
+        cache_dir = status.get("cache_dir", {}) or {}
+        persistent_data_dir = str(status.get("persistent_data_dir", "") or "").strip()
+        persistence_label = "Configured" if status.get("data_on_persistent_dir") else "Ephemeral local path"
+        if persistent_data_dir and status.get("temp_on_persistent_dir"):
+            persistence_label += " | Temp also on persistent disk"
+        await message.reply_text(
+            "\n".join([
+                "💽 **Storage Status**",
+                "",
+                f"Persistence: **{persistence_label}**",
+                f"Persistent Data Dir: `{persistent_data_dir or 'Not Set'}`",
+                f"Data Dir: `{data_dir.get('path', '')}` | `{data_dir.get('files', 0)}` files | `{human_bytes(data_dir.get('bytes', 0))}`",
+                f"Temp Dir: `{temp_dir.get('path', '')}` | `{temp_dir.get('files', 0)}` files | `{human_bytes(temp_dir.get('bytes', 0))}`",
+                f"Cache Dir: `{cache_dir.get('path', '')}` | `{cache_dir.get('files', 0)}` files | `{human_bytes(cache_dir.get('bytes', 0))}`",
+                f"Backup Dir: `{backup_dir.get('path', '')}` | `{backup_dir.get('files', 0)}` files | `{human_bytes(backup_dir.get('bytes', 0))}`",
+            ]),
+            disable_web_page_preview=True,
+        )
+        return True
+
+    if lowered.startswith("/backup"):
+        backup = create_backup_snapshot(label="manual")
+        caption = "\n".join([
+            "🗃 **Local Backup Created**",
+            f"Created: `{backup.get('created_at', '')}`",
+            f"Files: `{len(backup.get('summary', {}))}`",
+            f"Stored In: `{os.path.basename(backup.get('path', ''))}`",
+            "Cloud DB sync is not used for this backup.",
+        ])
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=backup.get("path"),
+            caption=caption,
+        )
+        return True
+
+    if lowered.startswith("/restore"):
+        parts = (message.text or "").split(maxsplit=1)
+        restore_target = None
+        reply_document = getattr(getattr(message, "reply_to_message", None), "document", None)
+        if reply_document:
+            restore_target = reply_document
+        elif len(parts) > 1 and parts[1].strip().lower() == "latest":
+            backup_dir = str(getattr(cfg, "BACKUP_DIR", "") or "")
+            if backup_dir and os.path.isdir(backup_dir):
+                candidates = sorted(
+                    [os.path.join(backup_dir, item) for item in os.listdir(backup_dir) if item.lower().endswith(".json")],
+                    reverse=True,
+                )
+                if candidates:
+                    result = restore_backup_snapshot(candidates[0], sync_remote=True)
+                    await message.reply_text(
+                        "\n".join([
+                            "♻️ **Restore Complete**",
+                            f"Source: `{os.path.basename(candidates[0])}`",
+                            f"Restored: `{', '.join(result.get('restored', []))}`",
+                            f"Supabase Sync: `{', '.join((result.get('sync', {}) or {}).get('synced', [])) or 'none'}`",
+                        ]),
+                        disable_web_page_preview=True,
+                    )
+                    return True
+        if not restore_target:
+            await message.reply_text("Use: `/restore latest` ya kisi backup JSON file par reply karke `/restore` bhejo.", disable_web_page_preview=True)
+            return True
+
+        download_path = os.path.join(TEMP_DIR, f"restore_{uuid.uuid4().hex[:8]}.json")
+        cleanup_path = download_path
+        try:
+            saved_path = await client.download_media(restore_target, file_name=download_path)
+            cleanup_path = saved_path or download_path
+            result = restore_backup_snapshot(cleanup_path, sync_remote=True)
+            await message.reply_text(
+                "\n".join([
+                    "♻️ **Restore Complete**",
+                    f"Restored: `{', '.join(result.get('restored', []))}`",
+                    f"Supabase Sync: `{', '.join((result.get('sync', {}) or {}).get('synced', [])) or 'none'}`",
+                ]),
+                disable_web_page_preview=True,
+            )
+        finally:
+            if cleanup_path and os.path.exists(cleanup_path):
+                try:
+                    os.remove(cleanup_path)
+                except Exception:
+                    pass
         return True
 
     if lowered.startswith("/users"):
@@ -5331,13 +5528,13 @@ async def all_callbacks(client, callback_query):
 
     elif data == "show_caption":
         text = caption_text(user_id)
-        kb = caption_buttons(s["caption_enabled"])
+        kb = caption_buttons(get_caption_settings_for_mode(s).get("enabled", False))
 
     elif data == "toggle_caption_enabled":
-        s["caption_enabled"] = not s["caption_enabled"]
-        update_user_settings(user_id, s)
+        caption_state = get_caption_settings_for_mode(s)
+        update_user_settings(user_id, {caption_state["enabled_key"]: not caption_state.get("enabled", False)})
         text = caption_text(user_id)
-        kb = caption_buttons(s["caption_enabled"])
+        kb = caption_buttons(get_caption_settings_for_mode(get_user_settings(user_id)).get("enabled", False))
 
     elif data == "show_caption_index_settings":
         text = caption_text(user_id)
@@ -5363,12 +5560,14 @@ async def all_callbacks(client, callback_query):
 
     elif data == "set_caption_text":
         set_user_state(user_id, "set_caption_text")
-        await callback_query.message.reply_text("📝 Ab custom caption bhejo.\n{index} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
+        current_mode = normalize_storage_mode(s.get("storage_mode", "telegram"))
+        await callback_query.message.reply_text(f"📝 Ab {current_mode} mode ke liye custom caption bhejo.\n{{index}} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
     elif data == "remove_caption":
-        update_user_settings(user_id, {"caption_text": "", "caption_enabled": False})
+        caption_state = get_caption_settings_for_mode(s)
+        update_user_settings(user_id, {caption_state["text_key"]: "", caption_state["enabled_key"]: False})
         text = caption_text(user_id)
         kb = caption_buttons(False)
 
@@ -5806,48 +6005,6 @@ async def catch_all(client, message):
         await message.reply_text("✅ Batch links save ho gaye.\n/settings me Batch section se Start Batch chala sakte ho.")
         return
 
-    ignored_cmds = (
-        "/stop_index",
-        "/index_stats",
-        "/index_id",
-        "/settings",
-        "/cancel",
-        "/cancelall",
-        "/cancel_all",
-        "/start",
-        "/help",
-        "/plan",
-        "/terms",
-        "/ping",
-        "/login",
-        "/login_status",
-        "/logout",
-        "/my_tasks",
-        "/set_bot",
-        "/bot_status",
-        "/remove_bot",
-        "/id",
-        "/recent_users",
-        "/set_batch_limit",
-        "/set_task_limit",
-        "/set_storage_access",
-    )
-
-    if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
-        if is_batch_mode(user_id):
-            links = parse_batch_links(text_raw)
-            normalized_text = str(text_raw or "").strip()
-            token_count = len([part for part in normalized_text.split() if part.strip()])
-            is_range_input = bool(re.search(r"https?://(?:t|telegram)\.me/\S+?-\d+", normalized_text))
-            if links and (len(links) > 1 or token_count > 1 or is_range_input or "\n" in normalized_text):
-                await process_batch_links(client, user_id, message, text_raw)
-                return
-
-        info = extract_telegram_link_info(text_raw)
-        if info:
-            await process_link_task(client, user_id, message, text_raw.strip())
-            return
-
     if state in {"set_gdrive_token_file", "set_rclone_config_file"} and message.document and not lowered.startswith("/cancel"):
         dest_path = derive_gdrive_token_dest(user_id, message.document.file_name or "token.pickle") if state == "set_gdrive_token_file" else derive_rclone_config_dest(user_id, message.document.file_name or "rclone.conf")
         try:
@@ -5864,16 +6021,6 @@ async def catch_all(client, message):
             await message.reply_text(success_text)
         except Exception as e:
             await message.reply_text(f"❌ File save failed: {e}")
-        return
-
-    if not state and is_media_message(message):
-        if capture_relay_bridge_message(user_id, message):
-            debug_log(f"Captured relay bridge message {getattr(message, 'id', 0)} for user {user_id}")
-            return
-        if should_ignore_direct_message_payload(user_id, message):
-            debug_log(f"Ignored relay bridge message {getattr(message, 'id', 0)} for user {user_id}")
-            return
-        await enqueue_direct_message_task(client, user_id, message)
         return
 
     if state and not lowered.startswith("/cancel"):
@@ -5924,11 +6071,19 @@ async def catch_all(client, message):
                 update_replace_rule_settings(user_id, get_user_settings(user_id), file_rules=value)
             elif setting_key == "replace_words_caption":
                 update_replace_rule_settings(user_id, get_user_settings(user_id), caption_rules=value)
+            elif setting_key == "caption_text":
+                current_settings = get_user_settings(user_id)
+                caption_state = get_caption_settings_for_mode(current_settings)
+                update_user_settings(
+                    user_id,
+                    {
+                        caption_state["text_key"]: value,
+                        caption_state["enabled_key"]: True,
+                    },
+                )
             else:
                 update_user_settings(user_id, {setting_key: value})
 
-            if setting_key == "caption_text":
-                update_user_settings(user_id, {"caption_enabled": True})
             if setting_key in {"auto_rename", "rename_template", "filename_prefix", "filename_suffix"}:
                 update_user_settings(user_id, {"auto_rename_enabled": True})
             if setting_key.startswith("metadata_"):
@@ -5937,6 +6092,58 @@ async def catch_all(client, message):
             clear_user_state(user_id)
             await message.reply_text(f"✅ `{setting_key.replace('_', ' ').title()}` update ho gaya.\n\n/settings bhejo dekhne ke liye.")
             return
+
+    ignored_cmds = (
+        "/stop_index",
+        "/index_stats",
+        "/index_id",
+        "/settings",
+        "/cancel",
+        "/cancelall",
+        "/cancel_all",
+        "/start",
+        "/help",
+        "/plan",
+        "/terms",
+        "/ping",
+        "/login",
+        "/login_status",
+        "/logout",
+        "/my_tasks",
+        "/set_bot",
+        "/bot_status",
+        "/remove_bot",
+        "/id",
+        "/recent_users",
+        "/set_batch_limit",
+        "/set_task_limit",
+        "/set_storage_access",
+    )
+
+    if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
+        if is_batch_mode(user_id):
+            links = parse_batch_links(text_raw)
+            normalized_text = str(text_raw or "").strip()
+            token_count = len([part for part in normalized_text.split() if part.strip()])
+            is_range_input = bool(re.search(r"https?://(?:t|telegram)\.me/\S+?-\d+", normalized_text))
+            if links and (len(links) > 1 or token_count > 1 or is_range_input or "\n" in normalized_text):
+                await process_batch_links(client, user_id, message, text_raw)
+                return
+
+        info = extract_telegram_link_info(text_raw)
+        if info:
+            await process_link_task(client, user_id, message, text_raw.strip())
+            return
+
+    if not state and is_media_message(message):
+        if capture_relay_bridge_message(user_id, message):
+            debug_log(f"Captured relay bridge message {getattr(message, 'id', 0)} for user {user_id}")
+            return
+        if should_ignore_direct_message_payload(user_id, message):
+            debug_log(f"Ignored relay bridge message {getattr(message, 'id', 0)} for user {user_id}")
+            return
+        await enqueue_direct_message_task(client, user_id, message)
+        return
 
     if await handle_admin_commands(client, message, lowered):
         return

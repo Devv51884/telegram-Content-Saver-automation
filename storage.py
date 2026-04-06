@@ -1,10 +1,12 @@
 
+import base64
 import json
 import os
 import re
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from threading import Lock
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -25,6 +27,9 @@ from config import (
     BROADCAST_LOG_FILE,
     USER_LIMITS_FILE,
     DATA_DIR,
+    TEMP_DIR,
+    CACHE_DIR,
+    BACKUP_DIR,
     DEFAULT_UPLOAD_MODE,
     DEFAULT_PLAN_NAME,
     DEFAULT_PREMIUM_PLAN_NAME,
@@ -37,6 +42,7 @@ from config import (
     SUPABASE_URL,
     SUPABASE_KEY,
     SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_DB_URL,
     SUPABASE_TIMEOUT,
     SUPABASE_SCHEMA,
     SUPABASE_USERS_TABLE,
@@ -46,8 +52,18 @@ from config import (
     SUPABASE_TASKS_TABLE,
     SUPABASE_STATS_TABLE,
     SUPABASE_BROADCAST_TABLE,
+    SUPABASE_BANNED_TABLE,
+    SUPABASE_INDEX_TABLE,
+    SUPABASE_FAILED_TASKS_TABLE,
+    SUPABASE_USER_LIMITS_TABLE,
+    SUPABASE_SESSIONS_TABLE,
+    SUPABASE_INDEX_STATE_TABLE,
     PREMIUM_GRACE_HOURS,
     TASK_STATUS_TTL_MINUTES,
+    TASK_CLEANUP_AFTER_HOURS,
+    TEMP_FILE_RETENTION_HOURS,
+    BACKUP_RETENTION_COUNT,
+    PERSISTENT_DATA_DIR,
     DEFAULT_STORAGE_MODE,
     FREE_STORAGE_MODES,
     PREMIUM_STORAGE_MODES,
@@ -66,6 +82,12 @@ DEFAULT_SETTINGS = {
     "thumbnail_file_id": "",
     "caption_enabled": False,
     "caption_text": "",
+    "telegram_caption_enabled": False,
+    "telegram_caption_text": "",
+    "gdrive_caption_enabled": False,
+    "gdrive_caption_text": "",
+    "rclone_caption_enabled": False,
+    "rclone_caption_text": "",
     "caption_parse_mode": "html",
     "caption_index_enabled": True,
     "caption_index_padding": 2,
@@ -115,6 +137,12 @@ DEFAULT_USER_LIMITS = {
     "allowed_storage_modes": "",
 }
 
+CAPTION_MODE_KEYS = {
+    "telegram": ("telegram_caption_enabled", "telegram_caption_text"),
+    "gdrive": ("gdrive_caption_enabled", "gdrive_caption_text"),
+    "rclone": ("rclone_caption_enabled", "rclone_caption_text"),
+}
+
 DEFAULT_STATS = {
     "started_at": "",
     "last_activity_at": "",
@@ -159,6 +187,28 @@ WAITING_KEYS = {
     "login_password": "login_password",
     "set_batch_links": "batch_last_input",
 }
+
+
+def _normalize_storage_mode_key(value: str) -> str:
+    value = str(value or "telegram").strip().lower()
+    return value if value in CAPTION_MODE_KEYS else "telegram"
+
+
+def get_caption_setting_keys(storage_mode: str | None = None):
+    return CAPTION_MODE_KEYS[_normalize_storage_mode_key(storage_mode)]
+
+
+def get_caption_settings_for_mode(settings: dict | None, storage_mode: str | None = None):
+    settings = settings if isinstance(settings, dict) else {}
+    mode = _normalize_storage_mode_key(storage_mode or settings.get("storage_mode", "telegram"))
+    enabled_key, text_key = get_caption_setting_keys(mode)
+    return {
+        "storage_mode": mode,
+        "enabled_key": enabled_key,
+        "text_key": text_key,
+        "enabled": _to_bool(settings.get(enabled_key, False), False),
+        "text": str(settings.get(text_key, "") or "").strip(),
+    }
 
 
 # =========================================================
@@ -261,6 +311,42 @@ _TASKS_CACHE_LOADED_AT = 0.0
 _TASKS_LAST_LOCAL_SAVE_AT = 0.0
 _TASKS_LAST_REMOTE_SYNC_AT = 0.0
 _LAST_ACTIVITY_SAVE_AT = 0.0
+_SUPABASE_BOOTSTRAP_ATTEMPTED = False
+_SUPABASE_BOOTSTRAP_STATE = {"enabled": False, "ready": False, "message": "Supabase not configured"}
+_SUPABASE_REST_DISABLED_UNTIL = 0.0
+_SUPABASE_REST_BACKOFF_SECONDS = 300.0
+
+SUPABASE_PAYLOAD_TABLE_KEYS = {
+    SUPABASE_USERS_TABLE: "id",
+    SUPABASE_SETTINGS_TABLE: "user_id",
+    SUPABASE_STATE_TABLE: "user_id",
+    SUPABASE_PREMIUM_TABLE: "user_id",
+    SUPABASE_TASKS_TABLE: "id",
+    SUPABASE_STATS_TABLE: "id",
+    SUPABASE_BROADCAST_TABLE: "created_at",
+    SUPABASE_BANNED_TABLE: "user_id",
+    SUPABASE_INDEX_TABLE: "index_no",
+    SUPABASE_FAILED_TASKS_TABLE: "task_id",
+    SUPABASE_USER_LIMITS_TABLE: "user_id",
+    SUPABASE_SESSIONS_TABLE: "user_id",
+    SUPABASE_INDEX_STATE_TABLE: "user_id",
+}
+
+SUPABASE_PAYLOAD_TABLE_TYPES = {
+    SUPABASE_USERS_TABLE: "bigint",
+    SUPABASE_SETTINGS_TABLE: "bigint",
+    SUPABASE_STATE_TABLE: "bigint",
+    SUPABASE_PREMIUM_TABLE: "bigint",
+    SUPABASE_TASKS_TABLE: "text",
+    SUPABASE_STATS_TABLE: "bigint",
+    SUPABASE_BROADCAST_TABLE: "text",
+    SUPABASE_BANNED_TABLE: "bigint",
+    SUPABASE_INDEX_TABLE: "bigint",
+    SUPABASE_FAILED_TASKS_TABLE: "text",
+    SUPABASE_USER_LIMITS_TABLE: "bigint",
+    SUPABASE_SESSIONS_TABLE: "bigint",
+    SUPABASE_INDEX_STATE_TABLE: "bigint",
+}
 
 
 def _task_last_seen_dt(task: dict):
@@ -336,6 +422,124 @@ def _ensure_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
+def _is_subpath(path: str, parent: str) -> bool:
+    path = str(path or "").strip()
+    parent = str(parent or "").strip()
+    if not path or not parent:
+        return False
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _directory_usage(path: str):
+    root = Path(str(path or "").strip())
+    stats = {
+        "path": str(root),
+        "exists": root.exists(),
+        "files": 0,
+        "bytes": 0,
+    }
+    if not root.exists():
+        return stats
+
+    for item in root.rglob("*"):
+        try:
+            if item.is_file():
+                stats["files"] += 1
+                stats["bytes"] += int(item.stat().st_size)
+        except Exception:
+            continue
+    return stats
+
+
+def _cleanup_old_files_in_dir(path: str, older_than_hours: int):
+    root = Path(str(path or "").strip())
+    if not root.exists() or older_than_hours <= 0:
+        return 0
+
+    cutoff = time.time() - (max(1, int(older_than_hours)) * 3600)
+    deleted = 0
+    for item in sorted(root.rglob("*"), reverse=True):
+        try:
+            if item.is_file() and float(item.stat().st_mtime) <= cutoff:
+                item.unlink()
+                deleted += 1
+        except Exception:
+            continue
+
+    for item in sorted(root.rglob("*"), reverse=True):
+        try:
+            if item.is_dir():
+                item.rmdir()
+        except Exception:
+            continue
+    return deleted
+
+
+def cleanup_temp_artifacts(hours: int | None = None):
+    retention_hours = max(1, int(hours or TEMP_FILE_RETENTION_HOURS or 12))
+    return {
+        "temp_deleted": _cleanup_old_files_in_dir(TEMP_DIR, retention_hours),
+        "cache_deleted": _cleanup_old_files_in_dir(CACHE_DIR, retention_hours),
+    }
+
+
+def prune_backup_snapshots(max_keep: int | None = None):
+    keep = max(1, int(max_keep or BACKUP_RETENTION_COUNT or 15))
+    root = Path(str(BACKUP_DIR or "").strip())
+    if not root.exists():
+        return 0
+
+    snapshots = []
+    for item in root.glob("*.json"):
+        try:
+            snapshots.append((float(item.stat().st_mtime), item))
+        except Exception:
+            continue
+
+    snapshots.sort(reverse=True)
+    deleted = 0
+    for _, item in snapshots[keep:]:
+        try:
+            item.unlink()
+            deleted += 1
+        except Exception:
+            continue
+    return deleted
+
+
+def cleanup_runtime_artifacts():
+    temp_info = cleanup_temp_artifacts()
+    backup_deleted = prune_backup_snapshots()
+    tasks_trimmed = cleanup_old_tasks(TASK_CLEANUP_AFTER_HOURS)
+    return {
+        "temp_deleted": temp_info.get("temp_deleted", 0),
+        "cache_deleted": temp_info.get("cache_deleted", 0),
+        "backup_deleted": backup_deleted,
+        "tasks_trimmed": bool(tasks_trimmed),
+    }
+
+
+def get_storage_runtime_status():
+    persistent_root = str(PERSISTENT_DATA_DIR or "").strip()
+    data_usage = _directory_usage(DATA_DIR)
+    temp_usage = _directory_usage(TEMP_DIR)
+    backup_usage = _directory_usage(BACKUP_DIR)
+    cache_usage = _directory_usage(CACHE_DIR)
+    return {
+        "persistent_data_dir": persistent_root,
+        "data_dir": data_usage,
+        "temp_dir": temp_usage,
+        "backup_dir": backup_usage,
+        "cache_dir": cache_usage,
+        "data_on_persistent_dir": _is_subpath(DATA_DIR, persistent_root) if persistent_root else False,
+        "temp_on_persistent_dir": _is_subpath(TEMP_DIR, persistent_root) if persistent_root else False,
+    }
+
+
 def _first_non_empty(*values):
     for value in values:
         if isinstance(value, str):
@@ -375,6 +579,132 @@ def _format_destination_display(destination: str, topic_id: str = "") -> str:
 # =========================================================
 # SUPABASE HELPERS
 # =========================================================
+def _is_safe_sql_identifier(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(value or "").strip()))
+
+
+def _sql_ident(value: str) -> str:
+    value = str(value or "").strip()
+    if not _is_safe_sql_identifier(value):
+        raise RuntimeError(f"Unsafe SQL identifier: {value}")
+    return f'"{value}"'
+
+
+def _supabase_payload_key(table: str) -> str:
+    return str(SUPABASE_PAYLOAD_TABLE_KEYS.get(table, "id"))
+
+
+def _prepare_supabase_row(table: str, row: dict):
+    row = dict(row or {})
+    key_name = _supabase_payload_key(table)
+    if table not in SUPABASE_PAYLOAD_TABLE_KEYS:
+        return row
+    return {
+        key_name: row.get(key_name),
+        "payload": row,
+    }
+
+
+def _decode_supabase_row(table: str, row: dict):
+    row = dict(row or {})
+    if table not in SUPABASE_PAYLOAD_TABLE_KEYS:
+        return row
+    payload = row.get("payload", {})
+    if not isinstance(payload, dict):
+        payload = {}
+    merged = dict(payload)
+    key_name = _supabase_payload_key(table)
+    if row.get(key_name) is not None:
+        merged[key_name] = row.get(key_name)
+    return merged
+
+
+def _create_payload_table_sql(table: str, key_name: str, key_type: str) -> str:
+    table_ident = _sql_ident(table)
+    key_ident = _sql_ident(key_name)
+    return (
+        f"create table if not exists {_sql_ident(SUPABASE_SCHEMA)}.{table_ident} ("
+        f"{key_ident} {key_type} primary key, "
+        "payload jsonb not null default '{}'::jsonb, "
+        "row_created_at timestamptz not null default timezone('utc', now()), "
+        "row_updated_at timestamptz not null default timezone('utc', now())"
+        ");"
+    )
+
+
+def ensure_supabase_schema(force: bool = False):
+    global _SUPABASE_BOOTSTRAP_ATTEMPTED, _SUPABASE_BOOTSTRAP_STATE
+
+    if _SUPABASE_BOOTSTRAP_ATTEMPTED and not force:
+        return dict(_SUPABASE_BOOTSTRAP_STATE)
+
+    _SUPABASE_BOOTSTRAP_ATTEMPTED = True
+    state = {
+        "enabled": _supabase_enabled(),
+        "ready": False,
+        "message": "Supabase not configured",
+    }
+
+    if not _supabase_enabled():
+        _SUPABASE_BOOTSTRAP_STATE = state
+        return dict(state)
+
+    if not SUPABASE_DB_URL:
+        state["ready"] = True
+        state["message"] = "SUPABASE_DB_URL missing hai. Existing REST tables hongi to sync chalega, warna tables pehle create karni hongi."
+        _SUPABASE_BOOTSTRAP_STATE = state
+        return dict(state)
+
+    try:
+        import psycopg
+    except Exception as error:
+        state["message"] = f"psycopg import failed: {error}"
+        _SUPABASE_BOOTSTRAP_STATE = state
+        return dict(state)
+
+    statements = [f"create schema if not exists {_sql_ident(SUPABASE_SCHEMA)};"]
+    for table, key_name in SUPABASE_PAYLOAD_TABLE_KEYS.items():
+        key_type = SUPABASE_PAYLOAD_TABLE_TYPES.get(table, "text")
+        statements.append(_create_payload_table_sql(table, key_name, key_type))
+
+    try:
+        with psycopg.connect(SUPABASE_DB_URL, autocommit=True) as conn:
+            with conn.cursor() as cursor:
+                for statement in statements:
+                    cursor.execute(statement)
+        state["ready"] = True
+        state["message"] = "Supabase schema ready"
+    except Exception as error:
+        state["message"] = f"Supabase schema bootstrap failed: {error}"
+
+    _SUPABASE_BOOTSTRAP_STATE = state
+    return dict(state)
+
+
+def get_supabase_status():
+    state = ensure_supabase_schema(force=False)
+    has_url = bool(str(SUPABASE_URL or "").strip())
+    has_key = bool(str(_supabase_auth_key() or "").strip())
+    has_db_url = bool(str(SUPABASE_DB_URL or "").strip())
+    role = "unknown"
+    token = str(_supabase_auth_key() or "").strip()
+    parts = token.split(".")
+    if len(parts) == 3:
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8"))
+            role = str(payload.get("role", "unknown") or "unknown")
+        except Exception:
+            role = "unknown"
+    return {
+        "enabled": _supabase_enabled(),
+        "has_url": has_url,
+        "has_key": has_key,
+        "has_db_url": has_db_url,
+        "key_role": role,
+        "schema_state": state,
+    }
+
+
 def _supabase_enabled() -> bool:
     return bool(SUPABASE_URL and (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY))
 
@@ -423,6 +753,104 @@ def _supabase_request(method: str, path: str, payload=None, prefer: str = "retur
         raise RuntimeError(f"Supabase request failed: {error}")
 
 
+def _load_psycopg():
+    try:
+        import psycopg
+        return psycopg
+    except Exception as error:
+        raise RuntimeError(f"psycopg import failed: {error}")
+
+
+def _supabase_db_fallback_available(table: str) -> bool:
+    return bool(str(SUPABASE_DB_URL or "").strip()) and table in SUPABASE_PAYLOAD_TABLE_KEYS
+
+
+def _should_try_supabase_rest(table: str) -> bool:
+    disabled_until = float(_SUPABASE_REST_DISABLED_UNTIL or 0.0)
+    if _supabase_db_fallback_available(table) and disabled_until > time.time():
+        return False
+    return True
+
+
+def _mark_supabase_rest_failure(table: str):
+    global _SUPABASE_REST_DISABLED_UNTIL
+    if _supabase_db_fallback_available(table):
+        _SUPABASE_REST_DISABLED_UNTIL = time.time() + _SUPABASE_REST_BACKOFF_SECONDS
+
+
+def _mark_supabase_rest_success():
+    global _SUPABASE_REST_DISABLED_UNTIL
+    _SUPABASE_REST_DISABLED_UNTIL = 0.0
+
+
+def _supabase_db_read_rows(table: str, filters=None):
+    if not _supabase_db_fallback_available(table):
+        raise RuntimeError("Supabase DB fallback not available")
+    psycopg = _load_psycopg()
+    key_name = _supabase_payload_key(table)
+    conditions = []
+    params = []
+    for column, value in (filters or {}).items():
+        conditions.append(f"{_sql_ident(column)} = %s")
+        params.append(_coerce_supabase_key_value(table, value) if column == key_name else value)
+    where_sql = f" where {' and '.join(conditions)}" if conditions else ""
+    query = (
+        f"select {_sql_ident(key_name)}, payload "
+        f"from {_sql_ident(SUPABASE_SCHEMA)}.{_sql_ident(table)}"
+        f"{where_sql}"
+    )
+    with psycopg.connect(SUPABASE_DB_URL, autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall() or []
+    return [{key_name: row[0], "payload": row[1]} for row in rows]
+
+
+def _supabase_db_delete_rows(table: str, filters=None):
+    if not _supabase_db_fallback_available(table):
+        raise RuntimeError("Supabase DB fallback not available")
+    psycopg = _load_psycopg()
+    conditions = []
+    params = []
+    for column, value in (filters or {}).items():
+        conditions.append(f"{_sql_ident(column)} = %s")
+        key_name = _supabase_payload_key(table)
+        params.append(_coerce_supabase_key_value(table, value) if column == key_name else value)
+    if not conditions:
+        raise RuntimeError("Delete without filters is not allowed")
+    query = (
+        f"delete from {_sql_ident(SUPABASE_SCHEMA)}.{_sql_ident(table)} "
+        f"where {' and '.join(conditions)}"
+    )
+    with psycopg.connect(SUPABASE_DB_URL, autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+
+
+def _supabase_db_upsert_rows(table: str, rows, conflict_columns="id"):
+    if not _supabase_db_fallback_available(table):
+        raise RuntimeError("Supabase DB fallback not available")
+    rows = rows if isinstance(rows, list) else [rows]
+    rows = [dict(_prepare_supabase_row(table, row) or {}) for row in rows if row]
+    if not rows:
+        return []
+    psycopg = _load_psycopg()
+    key_name = _supabase_payload_key(table)
+    conflict_idents = [part.strip() for part in str(conflict_columns or key_name).split(",") if part.strip()]
+    query = (
+        f"insert into {_sql_ident(SUPABASE_SCHEMA)}.{_sql_ident(table)} ({_sql_ident(key_name)}, payload) "
+        f"values (%s, %s::jsonb) "
+        f"on conflict ({', '.join(_sql_ident(part) for part in conflict_idents)}) "
+        f"do update set payload = excluded.payload"
+    )
+    with psycopg.connect(SUPABASE_DB_URL, autocommit=True) as conn:
+        with conn.cursor() as cursor:
+            for row in rows:
+                payload = row.get("payload", {})
+                cursor.execute(query, [row.get(key_name), json.dumps(payload, ensure_ascii=False)])
+    return rows
+
+
 def _quote(value) -> str:
     return urllib_parse.quote(str(value), safe="")
 
@@ -443,11 +871,33 @@ def _build_supabase_filters(filters=None) -> str:
 
 
 def _select_rows(table: str, filters=None):
-    return _supabase_request("GET", f"/rest/v1/{table}?select=*{_build_supabase_filters(filters)}")
+    select_clause = "*"
+    if table in SUPABASE_PAYLOAD_TABLE_KEYS:
+        select_clause = f"{_supabase_payload_key(table)},payload"
+    if not _should_try_supabase_rest(table):
+        rows = _supabase_db_read_rows(table, filters=filters)
+    else:
+        try:
+            rows = _supabase_request("GET", f"/rest/v1/{table}?select={select_clause}{_build_supabase_filters(filters)}") or []
+            _mark_supabase_rest_success()
+        except Exception:
+            _mark_supabase_rest_failure(table)
+            rows = _supabase_db_read_rows(table, filters=filters)
+    if not isinstance(rows, list):
+        return []
+    return [_decode_supabase_row(table, row) for row in rows]
 
 
 def _delete_rows(table: str, filters=None):
-    return _supabase_request("DELETE", f"/rest/v1/{table}?{_build_supabase_filters(filters).lstrip('&')}", prefer="return=minimal")
+    if not _should_try_supabase_rest(table):
+        return _supabase_db_delete_rows(table, filters=filters)
+    try:
+        result = _supabase_request("DELETE", f"/rest/v1/{table}?{_build_supabase_filters(filters).lstrip('&')}", prefer="return=minimal")
+        _mark_supabase_rest_success()
+        return result
+    except Exception:
+        _mark_supabase_rest_failure(table)
+        return _supabase_db_delete_rows(table, filters=filters)
 
 
 def _upsert_rows(table: str, rows, conflict_columns="id"):
@@ -455,11 +905,53 @@ def _upsert_rows(table: str, rows, conflict_columns="id"):
         rows = [rows]
     if not rows:
         return []
-    return _supabase_request(
-        "POST",
-        f"/rest/v1/{table}?on_conflict={conflict_columns}",
-        rows,
-    )
+    payload_rows = [_prepare_supabase_row(table, row) for row in rows]
+    if not _should_try_supabase_rest(table):
+        return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+    try:
+        result = _supabase_request(
+            "POST",
+            f"/rest/v1/{table}?on_conflict={conflict_columns}",
+            payload_rows,
+        )
+        _mark_supabase_rest_success()
+        return result
+    except Exception:
+        _mark_supabase_rest_failure(table)
+        return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+
+
+def _replace_table_rows(table: str, rows):
+    if not _supabase_enabled():
+        return
+    key_name = _supabase_payload_key(table)
+    rows = rows if isinstance(rows, list) else [rows]
+    normalized_rows = []
+    wanted_keys = set()
+    for row in rows:
+        row = dict(row or {})
+        typed_key = _coerce_supabase_key_value(table, row.get(key_name))
+        if str(typed_key) == "":
+            continue
+        row[key_name] = typed_key
+        normalized_rows.append(row)
+        wanted_keys.add(str(typed_key))
+
+    try:
+        remote_rows = _select_rows(table) or []
+    except Exception:
+        remote_rows = []
+
+    if normalized_rows:
+        _upsert_rows(table, normalized_rows, conflict_columns=key_name)
+
+    for remote_row in remote_rows:
+        typed_key = _coerce_supabase_key_value(table, remote_row.get(key_name))
+        if str(typed_key) not in wanted_keys:
+            try:
+                _delete_rows(table, {key_name: typed_key})
+            except Exception:
+                pass
 
 
 # =========================================================
@@ -488,6 +980,21 @@ def _normalize_settings(data: dict):
     if storage_mode not in {"telegram", "gdrive", "rclone"}:
         storage_mode = DEFAULT_SETTINGS["storage_mode"]
     merged["storage_mode"] = storage_mode
+
+    raw_data = data if isinstance(data, dict) else {}
+    has_explicit_caption_mode_fields = any(
+        key in raw_data
+        for pair in CAPTION_MODE_KEYS.values()
+        for key in pair
+    )
+    legacy_caption_text = str(merged.get("caption_text", "") or "").strip()
+    legacy_caption_enabled = _to_bool(merged.get("caption_enabled", False), False)
+    if not has_explicit_caption_mode_fields:
+        if legacy_caption_text and not any(str(merged.get(text_key, "") or "").strip() for _, text_key in CAPTION_MODE_KEYS.values()):
+            merged["telegram_caption_text"] = legacy_caption_text
+        if legacy_caption_enabled and not any(_to_bool(merged.get(enabled_key, False), False) for enabled_key, _ in CAPTION_MODE_KEYS.values()):
+            merged["telegram_caption_enabled"] = True
+
     bot_delivery_mode = str(merged.get("bot_delivery_mode", "main") or "main").strip().lower()
     merged["bot_delivery_mode"] = bot_delivery_mode if bot_delivery_mode in {"main", "personal"} else "main"
     route_template = str(merged.get("route_template", "off") or "off").strip().lower()
@@ -501,6 +1008,9 @@ def _normalize_settings(data: dict):
     bool_keys = {
         "thumbnail_enabled",
         "caption_enabled",
+        "telegram_caption_enabled",
+        "gdrive_caption_enabled",
+        "rclone_caption_enabled",
         "caption_index_enabled",
         "auto_rename_enabled",
         "filename_index_enabled",
@@ -521,6 +1031,10 @@ def _normalize_settings(data: dict):
             "last_login_user_id",
         }:
             merged[key] = str(value or "")
+
+    caption_state = get_caption_settings_for_mode(merged, storage_mode)
+    merged["caption_enabled"] = bool(caption_state["enabled"])
+    merged["caption_text"] = str(caption_state["text"] or "")
     return merged
 
 
@@ -738,6 +1252,45 @@ def _normalize_session_record(user_id: int, data=None):
     }
 
 
+def _normalize_banned_user_record(user_id: int, data=None):
+    data = data if isinstance(data, dict) else {}
+    return {
+        "user_id": int(user_id),
+        "is_banned": True,
+        "updated_at": str(data.get("updated_at", "") or ""),
+    }
+
+
+def _normalize_index_entry_record(index_no: int, data=None):
+    normalized = dict(data or {}) if isinstance(data, dict) else {}
+    normalized["index_no"] = max(1, _to_int(index_no, _to_int(normalized.get("index_no", 1), 1)))
+    normalized["indexed_at"] = str(normalized.get("indexed_at", "") or "")
+    return normalized
+
+
+def _normalize_failed_task_record(task_id: str, data=None):
+    data = data if isinstance(data, dict) else {}
+    task_payload = data.get("task", {})
+    return {
+        "task_id": str(task_id or ""),
+        "task": _normalize_task_record(task_id, task_payload) if isinstance(task_payload, dict) else {},
+        "logged_at": str(data.get("logged_at", "") or ""),
+    }
+
+
+def _normalize_index_state_record(user_id: int, data=None):
+    normalized = _default_index_state()
+    if isinstance(data, dict):
+        normalized.update(data)
+    normalized["user_id"] = int(user_id)
+    normalized["enabled"] = _to_bool(normalized.get("enabled", False), False)
+    normalized["count"] = max(0, _to_int(normalized.get("count", 0), 0))
+    normalized["user_start_offset"] = max(0, _to_int(normalized.get("user_start_offset", 0), 0))
+    normalized["user_current_index"] = max(0, _to_int(normalized.get("user_current_index", 0), 0))
+    normalized["last_reset_at"] = str(normalized.get("last_reset_at", "") or "")
+    return normalized
+
+
 def _normalize_index_state(data=None):
     data = data or {}
     return {
@@ -782,48 +1335,95 @@ def _save_local_list(path, data):
     save_json(path, data if isinstance(data, list) else [])
 
 
+def _coerce_supabase_key_value(table: str, value):
+    key_type = str(SUPABASE_PAYLOAD_TABLE_TYPES.get(table, "text") or "text").strip().lower()
+    if "int" in key_type:
+        return _to_int(value, 0)
+    return str(value or "")
+
+
 def _sync_full_local_map_to_supabase(path: str, table: str, key_name: str, normalizer):
     if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
         return
-    try:
-        local_map = _load_local_map(path)
-        rows = []
-        for raw_key, raw_value in local_map.items():
-            try:
-                rows.append(normalizer(int(raw_key), raw_value))
-            except Exception:
-                continue
-        if rows:
-            _upsert_rows(table, rows, conflict_columns=key_name)
-    except Exception:
-        pass
+    local_map = _load_local_map(path)
+    rows = []
+    for raw_key, raw_value in local_map.items():
+        try:
+            typed_key = _coerce_supabase_key_value(table, raw_key)
+            rows.append(normalizer(typed_key, raw_value))
+        except Exception:
+            continue
+    if rows:
+        _upsert_rows(table, rows, conflict_columns=key_name)
 
 
-def _get_hybrid_map(path: str, table: str, key_name: str, normalizer):
+def _replace_full_local_map_on_supabase(path: str, table: str, normalizer):
+    if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
+        return
+    local_map = _load_local_map(path)
+    rows = []
+    for raw_key, raw_value in local_map.items():
+        try:
+            typed_key = _coerce_supabase_key_value(table, raw_key)
+            rows.append(normalizer(typed_key, raw_value))
+        except Exception:
+            continue
+    _replace_table_rows(table, rows)
+
+
+def _get_hybrid_map(path: str, table: str, key_name: str, normalizer, prefer_local: bool = False, prefer_newer_by: str | None = None):
     local_map = _load_local_map(path)
     if _supabase_enabled():
         try:
             rows = _select_rows(table) or []
             remote_map = {}
             for row in rows:
-                row_key = str(row.get(key_name))
+                typed_key = _coerce_supabase_key_value(table, row.get(key_name))
+                row_key = str(typed_key)
                 if row_key:
-                    remote_map[row_key] = normalizer(int(row.get(key_name, 0) or 0), row)
+                    remote_map[row_key] = normalizer(typed_key, row)
             if ENABLE_LOCAL_FALLBACK:
-                merged = dict(local_map)
-                merged.update(remote_map)
+                if prefer_newer_by:
+                    merged = {}
+                    all_keys = set(local_map.keys()) | set(remote_map.keys())
+                    for row_key in all_keys:
+                        local_row = local_map.get(row_key)
+                        remote_row = remote_map.get(row_key)
+                        if local_row is None:
+                            merged[row_key] = remote_row
+                            continue
+                        if remote_row is None:
+                            merged[row_key] = local_row
+                            continue
+                        local_dt = _parse_iso((local_row or {}).get(prefer_newer_by, ""))
+                        remote_dt = _parse_iso((remote_row or {}).get(prefer_newer_by, ""))
+                        if local_dt and remote_dt:
+                            merged[row_key] = local_row if local_dt >= remote_dt else remote_row
+                        elif local_dt:
+                            merged[row_key] = local_row
+                        elif remote_dt:
+                            merged[row_key] = remote_row
+                        else:
+                            merged[row_key] = local_row if prefer_local else remote_row
+                else:
+                    merged = dict(remote_map) if prefer_local else dict(local_map)
+                    merged.update(local_map if prefer_local else remote_map)
                 _save_local_map(path, merged)
                 return merged
             return remote_map
         except Exception:
-            _sync_full_local_map_to_supabase(path, table, key_name, normalizer)
+            try:
+                _sync_full_local_map_to_supabase(path, table, key_name, normalizer)
+            except Exception:
+                pass
     return local_map
 
 
 def _upsert_hybrid_map_record(path: str, table: str, key_name: str, key_value: int, row: dict, normalizer):
-    normalized = normalizer(int(key_value), row)
+    typed_key = _coerce_supabase_key_value(table, key_value)
+    normalized = normalizer(typed_key, row)
     local_map = _load_local_map(path)
-    local_map[str(key_value)] = normalized
+    local_map[str(typed_key)] = normalized
     _save_local_map(path, local_map)
     if _supabase_enabled():
         try:
@@ -834,12 +1434,13 @@ def _upsert_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
 
 
 def _delete_hybrid_map_record(path: str, table: str, key_name: str, key_value: int):
+    typed_key = _coerce_supabase_key_value(table, key_value)
     local_map = _load_local_map(path)
-    local_map.pop(str(key_value), None)
+    local_map.pop(str(typed_key), None)
     _save_local_map(path, local_map)
     if _supabase_enabled():
         try:
-            _delete_rows(table, {key_name: int(key_value)})
+            _delete_rows(table, {key_name: typed_key})
         except Exception:
             pass
 
@@ -848,7 +1449,7 @@ def _delete_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
 # SETTINGS
 # =========================================================
 def get_all_settings():
-    return _get_hybrid_map(SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record)
+    return _get_hybrid_map(SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record, prefer_newer_by="updated_at")
 
 
 def _normalize_settings_record(user_id: int, data=None):
@@ -904,7 +1505,8 @@ def reset_user_settings(user_id: int):
 # STATE
 # =========================================================
 def get_all_states():
-    return _get_hybrid_map(STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record)
+    # User input state is latency-sensitive; prefer fresh local state over stale remote rows.
+    return _get_hybrid_map(STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record, prefer_local=True)
 
 
 def save_all_states(data):
@@ -1060,12 +1662,35 @@ def get_all_users_page(limit: int = 20, offset: int = 0):
 # =========================================================
 def get_banned_users():
     data = load_json(BANNED_FILE, [])
-    return set(int(item) for item in data if str(item).lstrip("-").isdigit())
+    local = set(int(item) for item in data if str(item).lstrip("-").isdigit())
+    if _supabase_enabled():
+        try:
+            rows = _select_rows(SUPABASE_BANNED_TABLE) or []
+            remote = set()
+            for row in rows:
+                user_id = _to_int(row.get("user_id", 0), 0)
+                if user_id > 0:
+                    remote.add(user_id)
+            if ENABLE_LOCAL_FALLBACK:
+                merged = set(local)
+                merged.update(remote)
+                save_json(BANNED_FILE, sorted(merged))
+                return merged
+            return remote
+        except Exception:
+            pass
+    return local
 
 
 def save_banned_users(data):
     clean = sorted({int(item) for item in data if str(item).lstrip("-").isdigit()})
     save_json(BANNED_FILE, clean)
+    if _supabase_enabled():
+        try:
+            rows = [_normalize_banned_user_record(user_id, {"updated_at": _now_iso()}) for user_id in clean]
+            _replace_table_rows(SUPABASE_BANNED_TABLE, rows)
+        except Exception:
+            pass
     users = get_all_users()
     changed = False
     for uid, row in list(users.items()):
@@ -1271,12 +1896,21 @@ def set_user_plan_features(user_id: int, features_text, updated_by: int = 0):
 # CUSTOM USER LIMITS / STORAGE ACCESS
 # =========================================================
 def get_all_user_limits():
-    data = _load_local_map(USER_LIMITS_FILE)
-    return data if isinstance(data, dict) else {}
+    return _get_hybrid_map(USER_LIMITS_FILE, SUPABASE_USER_LIMITS_TABLE, "user_id", _normalize_user_limit_record)
 
 
 def save_all_user_limits(data):
-    _save_local_map(USER_LIMITS_FILE, data if isinstance(data, dict) else {})
+    data = data if isinstance(data, dict) else {}
+    _save_local_map(USER_LIMITS_FILE, data)
+    if _supabase_enabled():
+        try:
+            rows = []
+            for uid, row in data.items():
+                rows.append(_normalize_user_limit_record(int(uid), row))
+            if rows:
+                _upsert_rows(SUPABASE_USER_LIMITS_TABLE, rows, conflict_columns="user_id")
+        except Exception:
+            pass
 
 
 def _normalize_user_limit_record(user_id: int, data=None):
@@ -1415,11 +2049,49 @@ def get_settings_marks(user_id: int):
 # INDEX STORAGE
 # =========================================================
 def get_all_index_entries():
-    return _load_local_list(INDEX_FILE)
+    local = _load_local_list(INDEX_FILE)
+    local_rows = {}
+    for offset, row in enumerate(local, start=1):
+        if not isinstance(row, dict):
+            continue
+        index_no = max(1, _to_int(row.get("index_no", offset), offset))
+        local_rows[index_no] = _normalize_index_entry_record(index_no, row)
+
+    if _supabase_enabled():
+        try:
+            rows = _select_rows(SUPABASE_INDEX_TABLE) or []
+            remote_rows = {}
+            for row in rows:
+                index_no = _to_int(row.get("index_no", 0), 0)
+                if index_no > 0:
+                    remote_rows[index_no] = _normalize_index_entry_record(index_no, row)
+            if ENABLE_LOCAL_FALLBACK:
+                merged_rows = dict(local_rows)
+                merged_rows.update(remote_rows)
+                merged = [merged_rows[key] for key in sorted(merged_rows)]
+                _save_local_list(INDEX_FILE, merged)
+                return merged
+            return [remote_rows[key] for key in sorted(remote_rows)]
+        except Exception:
+            pass
+
+    return [local_rows[key] for key in sorted(local_rows)]
 
 
 def save_all_index_entries(data):
-    _save_local_list(INDEX_FILE, data)
+    normalized = []
+    for offset, row in enumerate(data if isinstance(data, list) else [], start=1):
+        if not isinstance(row, dict):
+            continue
+        index_no = max(1, _to_int(row.get("index_no", offset), offset))
+        normalized.append(_normalize_index_entry_record(index_no, row))
+    normalized.sort(key=lambda item: int(item.get("index_no", 0) or 0))
+    _save_local_list(INDEX_FILE, normalized)
+    if _supabase_enabled():
+        try:
+            _replace_table_rows(SUPABASE_INDEX_TABLE, normalized)
+        except Exception:
+            pass
 
 
 def add_index_entry(entry: dict):
@@ -1456,12 +2128,21 @@ def format_index_number(index_no: int, padding: int = 2) -> str:
 
 
 def get_index_state():
-    data = load_json(INDEX_STATE_FILE, {})
-    return data if isinstance(data, dict) else {}
+    return _get_hybrid_map(INDEX_STATE_FILE, SUPABASE_INDEX_STATE_TABLE, "user_id", _normalize_index_state_record)
 
 
 def save_index_state(data):
-    save_json(INDEX_STATE_FILE, data if isinstance(data, dict) else {})
+    data = data if isinstance(data, dict) else {}
+    _save_local_map(INDEX_STATE_FILE, data)
+    if _supabase_enabled():
+        try:
+            rows = []
+            for uid, row in data.items():
+                rows.append(_normalize_index_state_record(int(uid), row))
+            if rows:
+                _upsert_rows(SUPABASE_INDEX_STATE_TABLE, rows, conflict_columns="user_id")
+        except Exception:
+            pass
 
 
 def _default_index_state():
@@ -1609,12 +2290,21 @@ def parse_batch_links(raw_text: str):
 # USER SESSIONS
 # =========================================================
 def get_all_user_sessions():
-    data = _load_local_map(SESSION_STORE_FILE)
-    return data if isinstance(data, dict) else {}
+    return _get_hybrid_map(SESSION_STORE_FILE, SUPABASE_SESSIONS_TABLE, "user_id", _normalize_session_record)
 
 
 def save_all_user_sessions(data):
-    _save_local_map(SESSION_STORE_FILE, data if isinstance(data, dict) else {})
+    data = data if isinstance(data, dict) else {}
+    _save_local_map(SESSION_STORE_FILE, data)
+    if _supabase_enabled():
+        try:
+            rows = []
+            for uid, row in data.items():
+                rows.append(_normalize_session_record(int(uid), row))
+            if rows:
+                _upsert_rows(SUPABASE_SESSIONS_TABLE, rows, conflict_columns="user_id")
+        except Exception:
+            pass
 
 
 def save_user_session(user_id: int, session_string: str, tg_user_id: int = 0, phone: str = ""):
@@ -1734,27 +2424,61 @@ def get_all_tasks(force_refresh: bool = False):
     return _set_tasks_cache(normalized_local)
 
 
-def sync_local_persistent_data_to_supabase():
+def _sync_local_banned_users_to_supabase(prune_missing: bool = False):
+    data = load_json(BANNED_FILE, [])
+    clean = sorted({int(item) for item in data if str(item).lstrip("-").isdigit()})
+    rows = [_normalize_banned_user_record(user_id, {"updated_at": _now_iso()}) for user_id in clean]
+    if prune_missing:
+        _replace_table_rows(SUPABASE_BANNED_TABLE, rows)
+    elif rows:
+        _upsert_rows(SUPABASE_BANNED_TABLE, rows, conflict_columns="user_id")
+
+
+def _sync_local_index_entries_to_supabase(prune_missing: bool = False):
+    data = _load_local_list(INDEX_FILE)
+    rows = []
+    for offset, row in enumerate(data, start=1):
+        if not isinstance(row, dict):
+            continue
+        index_no = max(1, _to_int(row.get("index_no", offset), offset))
+        rows.append(_normalize_index_entry_record(index_no, row))
+    if prune_missing:
+        _replace_table_rows(SUPABASE_INDEX_TABLE, rows)
+    elif rows:
+        _upsert_rows(SUPABASE_INDEX_TABLE, rows, conflict_columns="index_no")
+
+
+def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: bool = False):
     if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
         return {"enabled": False, "synced": []}
 
+    schema_state = ensure_supabase_schema(force=force)
     synced = []
+    errors = []
+    map_sync_fn = _replace_full_local_map_on_supabase if prune_missing else _sync_full_local_map_to_supabase
     sync_jobs = [
-        (USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record, "users"),
-        (SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record, "settings"),
-        (STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record, "state"),
-        (PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record, "premium"),
-        (TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record, "tasks"),
+        ("users", map_sync_fn, USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record),
+        ("settings", map_sync_fn, SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record),
+        ("state", map_sync_fn, STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record),
+        ("premium", map_sync_fn, PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record),
+        ("tasks", map_sync_fn, TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record),
+        ("user_limits", map_sync_fn, USER_LIMITS_FILE, SUPABASE_USER_LIMITS_TABLE, "user_id", _normalize_user_limit_record),
+        ("sessions", map_sync_fn, SESSION_STORE_FILE, SUPABASE_SESSIONS_TABLE, "user_id", _normalize_session_record),
+        ("index_state", map_sync_fn, INDEX_STATE_FILE, SUPABASE_INDEX_STATE_TABLE, "user_id", _normalize_index_state_record),
+        ("failed_tasks", map_sync_fn, FAILED_TASKS_FILE, SUPABASE_FAILED_TASKS_TABLE, "task_id", _normalize_failed_task_record),
+        ("banned", _sync_local_banned_users_to_supabase, prune_missing),
+        ("index_entries", _sync_local_index_entries_to_supabase, prune_missing),
     ]
 
-    for path, table, key_name, normalizer, label in sync_jobs:
+    for job in sync_jobs:
+        label, sync_fn, *args = job
         try:
-            _sync_full_local_map_to_supabase(path, table, key_name, normalizer)
+            sync_fn(*args)
             synced.append(label)
-        except Exception:
-            pass
+        except Exception as error:
+            errors.append(f"{label}: {error}")
 
-    return {"enabled": True, "synced": synced}
+    return {"enabled": True, "synced": synced, "errors": errors, "schema_state": schema_state}
 
 
 def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):
@@ -1929,12 +2653,20 @@ def sync_premium_stats():
 
 
 def get_failed_tasks():
-    data = load_json(FAILED_TASKS_FILE, {})
-    return data if isinstance(data, dict) else {}
+    return _get_hybrid_map(FAILED_TASKS_FILE, SUPABASE_FAILED_TASKS_TABLE, "task_id", _normalize_failed_task_record)
 
 
 def save_failed_tasks(data):
-    save_json(FAILED_TASKS_FILE, data if isinstance(data, dict) else {})
+    data = data if isinstance(data, dict) else {}
+    _save_local_map(FAILED_TASKS_FILE, data)
+    if _supabase_enabled():
+        try:
+            rows = []
+            for task_id, row in data.items():
+                rows.append(_normalize_failed_task_record(task_id, row))
+            _replace_table_rows(SUPABASE_FAILED_TASKS_TABLE, rows)
+        except Exception:
+            pass
 
 
 def log_failed_task(task_id: str, task_data: dict):
@@ -1988,6 +2720,7 @@ def add_broadcast_log(entry: dict):
 # =========================================================
 def hydrate_local_files():
     _ensure_dir()
+    os.makedirs(BACKUP_DIR, exist_ok=True)
     for path, default in [
         (SETTINGS_FILE, {}),
         (STATE_FILE, {}),
@@ -2007,10 +2740,91 @@ def hydrate_local_files():
             save_json(path, default)
 
 
+def _persistent_backup_sources():
+    return [
+        ("settings", SETTINGS_FILE, {}),
+        ("state", STATE_FILE, {}),
+        ("users", USERS_FILE, {}),
+        ("banned", BANNED_FILE, []),
+        ("index_entries", INDEX_FILE, []),
+        ("index_state", INDEX_STATE_FILE, {}),
+        ("sessions", SESSION_STORE_FILE, {}),
+        ("tasks", TASKS_FILE, {}),
+        ("premium", PREMIUM_FILE, {}),
+        ("stats", STATS_FILE, DEFAULT_STATS),
+        ("failed_tasks", FAILED_TASKS_FILE, {}),
+        ("broadcast_logs", BROADCAST_LOG_FILE, []),
+        ("user_limits", USER_LIMITS_FILE, {}),
+    ]
+
+
+def clear_runtime_storage_cache():
+    global _TASKS_CACHE, _TASKS_CACHE_LOADED_AT, _TASKS_LAST_LOCAL_SAVE_AT, _TASKS_LAST_REMOTE_SYNC_AT
+    _TASKS_CACHE = None
+    _TASKS_CACHE_LOADED_AT = 0.0
+    _TASKS_LAST_LOCAL_SAVE_AT = 0.0
+    _TASKS_LAST_REMOTE_SYNC_AT = 0.0
+
+
+def create_backup_snapshot(label: str = "manual"):
+    hydrate_local_files()
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(label or "manual")).strip("_") or "manual"
+    path = os.path.join(BACKUP_DIR, f"code_devil_backup_{stamp}_{slug}.json")
+
+    files = {}
+    summary = {}
+    for name, file_path, default in _persistent_backup_sources():
+        payload = load_json(file_path, default)
+        files[name] = payload
+        if isinstance(payload, dict):
+            summary[name] = len(payload)
+        elif isinstance(payload, list):
+            summary[name] = len(payload)
+        else:
+            summary[name] = 1 if payload else 0
+
+    snapshot = {
+        "version": 1,
+        "created_at": _now_iso(),
+        "label": slug,
+        "files": files,
+        "summary": summary,
+        "supabase": get_supabase_status(),
+    }
+    save_json(path, snapshot)
+    return {"path": path, "summary": summary, "created_at": snapshot["created_at"]}
+
+
+def restore_backup_snapshot(path: str, sync_remote: bool = True):
+    snapshot = load_json(path, {})
+    files = snapshot.get("files", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(files, dict) or not files:
+        raise RuntimeError("Backup snapshot invalid hai ya files payload missing hai.")
+
+    for name, file_path, default in _persistent_backup_sources():
+        payload = files.get(name, deepcopy(default))
+        save_json(file_path, payload)
+
+    clear_runtime_storage_cache()
+
+    sync_info = {"enabled": False, "synced": []}
+    if sync_remote:
+        sync_info = sync_local_persistent_data_to_supabase(force=True, prune_missing=True)
+
+    return {
+        "restored": [name for name, _, _ in _persistent_backup_sources()],
+        "sync": sync_info,
+    }
+
+
 def initialize_storage():
     hydrate_local_files()
+    ensure_supabase_schema(force=False)
     normalize_existing_tasks_inplace()
     cleanup_stale_active_tasks()
+    cleanup_runtime_artifacts()
     touch_last_activity()
     cleanup_expired_premium_users()
     sync_premium_stats()
@@ -2114,6 +2928,7 @@ def get_user_telegram_upload_mode(user_id: int) -> str:
 def get_settings_marks(user_id: int):
     settings = get_user_settings(user_id)
     storage_mode = str(settings.get("storage_mode", "telegram") or "telegram").strip().lower()
+    caption_state = get_caption_settings_for_mode(settings, storage_mode)
     telegram_mode = str(settings.get("telegram_upload_mode", settings.get("upload_mode", "media")) or "media").strip().lower()
     has_replace_rules = bool(
         settings.get("replace_words_file")
@@ -2124,7 +2939,7 @@ def get_settings_marks(user_id: int):
         "storage_mode": {"telegram": "📨", "gdrive": "☁️", "rclone": "🗂"}.get(storage_mode, "📨"),
         "upload_mode": "📄" if telegram_mode == "document" else "🎞",
         "thumbnail": setting_mark(settings.get("thumbnail_file_id")),
-        "caption": "✅" if settings.get("caption_enabled") and settings.get("caption_text") else "❌",
+        "caption": "✅" if caption_state.get("enabled") and caption_state.get("text") else "❌",
         "prefix": setting_mark(settings.get("prefix")),
         "suffix": setting_mark(settings.get("suffix")),
         "auto_rename": setting_mark(settings.get("auto_rename") or settings.get("rename_template") or settings.get("filename_prefix") or settings.get("filename_suffix")),

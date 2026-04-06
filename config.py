@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,6 +24,18 @@ def _resolve_path(value: str, default: str = "") -> str:
     if not path.is_absolute():
         path = BASE_DIR / path
     return str(path.resolve())
+
+
+def _default_temp_dir() -> str:
+    return os.path.join(tempfile.gettempdir(), "code_devil_v1_temp")
+
+
+def _normalized_path_token(value: str) -> str:
+    return str(value or "").replace("\\", "/").strip().strip("/")
+
+
+def _is_default_path_value(value: str, default_value: str) -> bool:
+    return _normalized_path_token(value) == _normalized_path_token(default_value)
 
 
 def _get_int(name: str, default: int = 0) -> int:
@@ -131,29 +144,52 @@ if OWNER_ID:
 # =========================================================
 # PATHS / STORAGE
 # =========================================================
-DATA_DIR = _resolve_path(_get_str("DATA_DIR", "data"))
-TEMP_DIR = _resolve_path(_get_str("TEMP_DIR", "temp"))
-CACHE_DIR = _resolve_path(_get_str("CACHE_DIR", os.path.join(DATA_DIR, "cache")))
-BACKUP_DIR = _resolve_path(_get_str("BACKUP_DIR", os.path.join(DATA_DIR, "backups")))
-EXPORT_DIR = _resolve_path(_get_str("EXPORT_DIR", os.path.join(DATA_DIR, "exports")))
+PERSISTENT_DATA_DIR = _resolve_path(
+    _get_str("PERSISTENT_DATA_DIR", "")
+    or _get_str("RENDER_DISK_MOUNT_PATH", "")
+    or _get_str("RENDER_DISK_PATH", "")
+)
+_raw_data_dir = _get_str("DATA_DIR", "")
+if PERSISTENT_DATA_DIR and (not _raw_data_dir or _is_default_path_value(_raw_data_dir, "data")):
+    DATA_DIR = _resolve_path(PERSISTENT_DATA_DIR)
+else:
+    DATA_DIR = _resolve_path(_raw_data_dir or "data")
 
-SETTINGS_FILE = _resolve_path(_get_str("SETTINGS_FILE", os.path.join(DATA_DIR, "user_settings.json")))
-STATE_FILE = _resolve_path(_get_str("STATE_FILE", os.path.join(DATA_DIR, "user_state.json")))
-USERS_FILE = _resolve_path(_get_str("USERS_FILE", os.path.join(DATA_DIR, "users.json")))
-BANNED_FILE = _resolve_path(_get_str("BANNED_FILE", os.path.join(DATA_DIR, "banned_users.json")))
-INDEX_FILE = _resolve_path(_get_str("INDEX_FILE", os.path.join(DATA_DIR, "index_store.json")))
-INDEX_STATE_FILE = _resolve_path(_get_str("INDEX_STATE_FILE", os.path.join(DATA_DIR, "index_state.json")))
-TASKS_FILE = _resolve_path(_get_str("TASKS_FILE", os.path.join(DATA_DIR, "tasks.json")))
-PREMIUM_FILE = _resolve_path(_get_str("PREMIUM_FILE", os.path.join(DATA_DIR, "premium_users.json")))
-STATS_FILE = _resolve_path(_get_str("STATS_FILE", os.path.join(DATA_DIR, "stats.json")))
-BROADCAST_LOG_FILE = _resolve_path(_get_str("BROADCAST_LOG_FILE", os.path.join(DATA_DIR, "broadcast_log.json")))
-FAILED_TASKS_FILE = _resolve_path(_get_str("FAILED_TASKS_FILE", os.path.join(DATA_DIR, "failed_tasks.json")))
-DESTINATIONS_FILE = _resolve_path(_get_str("DESTINATIONS_FILE", os.path.join(DATA_DIR, "destinations.json")))
-AUDIT_LOG_FILE = _resolve_path(_get_str("AUDIT_LOG_FILE", os.path.join(DATA_DIR, "task_audit_log.json")))
-USER_LIMITS_FILE = _resolve_path(_get_str("USER_LIMITS_FILE", os.path.join(DATA_DIR, "user_limits.json")))
-GDRIVE_TOKENS_DIR = _resolve_path(_get_str("GDRIVE_TOKENS_DIR", os.path.join(DATA_DIR, "gdrive_tokens")))
-RCLONE_CONFIGS_DIR = _resolve_path(_get_str("RCLONE_CONFIGS_DIR", os.path.join(DATA_DIR, "rclone_configs")))
-GDRIVE_CREDENTIALS_FILE = _resolve_path(_get_str("GDRIVE_CREDENTIALS_FILE", os.path.join(DATA_DIR, "credentials.json")))
+
+def _resolve_storage_path(env_name: str, default_value: str, relative_name: str) -> str:
+    raw = _get_str(env_name, "")
+    if PERSISTENT_DATA_DIR and (not raw or _is_default_path_value(raw, default_value)):
+        return _resolve_path(os.path.join(DATA_DIR, relative_name))
+    return _resolve_path(raw or os.path.join(DATA_DIR, relative_name))
+
+
+_raw_temp_dir = _get_str("TEMP_DIR", "")
+if not _raw_temp_dir or _is_default_path_value(_raw_temp_dir, "temp"):
+    TEMP_DIR = _resolve_path(_default_temp_dir())
+else:
+    TEMP_DIR = _resolve_path(_raw_temp_dir)
+
+CACHE_DIR = _resolve_storage_path("CACHE_DIR", "data/cache", "cache")
+BACKUP_DIR = _resolve_storage_path("BACKUP_DIR", "data/backups", "backups")
+EXPORT_DIR = _resolve_storage_path("EXPORT_DIR", "data/exports", "exports")
+SESSION_STORE_FILE = _resolve_storage_path("SESSION_STORE_FILE", "data/user_sessions.json", "user_sessions.json")
+SETTINGS_FILE = _resolve_storage_path("SETTINGS_FILE", "data/user_settings.json", "user_settings.json")
+STATE_FILE = _resolve_storage_path("STATE_FILE", "data/user_state.json", "user_state.json")
+USERS_FILE = _resolve_storage_path("USERS_FILE", "data/users.json", "users.json")
+BANNED_FILE = _resolve_storage_path("BANNED_FILE", "data/banned_users.json", "banned_users.json")
+INDEX_FILE = _resolve_storage_path("INDEX_FILE", "data/index_store.json", "index_store.json")
+INDEX_STATE_FILE = _resolve_storage_path("INDEX_STATE_FILE", "data/index_state.json", "index_state.json")
+TASKS_FILE = _resolve_storage_path("TASKS_FILE", "data/tasks.json", "tasks.json")
+PREMIUM_FILE = _resolve_storage_path("PREMIUM_FILE", "data/premium_users.json", "premium_users.json")
+STATS_FILE = _resolve_storage_path("STATS_FILE", "data/stats.json", "stats.json")
+BROADCAST_LOG_FILE = _resolve_storage_path("BROADCAST_LOG_FILE", "data/broadcast_log.json", "broadcast_log.json")
+FAILED_TASKS_FILE = _resolve_storage_path("FAILED_TASKS_FILE", "data/failed_tasks.json", "failed_tasks.json")
+DESTINATIONS_FILE = _resolve_storage_path("DESTINATIONS_FILE", "data/destinations.json", "destinations.json")
+AUDIT_LOG_FILE = _resolve_storage_path("AUDIT_LOG_FILE", "data/task_audit_log.json", "task_audit_log.json")
+USER_LIMITS_FILE = _resolve_storage_path("USER_LIMITS_FILE", "data/user_limits.json", "user_limits.json")
+GDRIVE_TOKENS_DIR = _resolve_storage_path("GDRIVE_TOKENS_DIR", "data/gdrive_tokens", "gdrive_tokens")
+RCLONE_CONFIGS_DIR = _resolve_storage_path("RCLONE_CONFIGS_DIR", "data/rclone_configs", "rclone_configs")
+GDRIVE_CREDENTIALS_FILE = _resolve_storage_path("GDRIVE_CREDENTIALS_FILE", "data/credentials.json", "credentials.json")
 RCLONE_BIN = _get_str("RCLONE_BIN", "rclone")
 
 
@@ -164,8 +200,9 @@ DATABASE_MODE = _sanitize_database_mode(_get_str("DATABASE_MODE", "hybrid"))
 ENABLE_LOCAL_FALLBACK = _get_bool("ENABLE_LOCAL_FALLBACK", True)
 SYNC_LOCAL_TO_SUPABASE = _get_bool("SYNC_LOCAL_TO_SUPABASE", True)
 SUPABASE_URL = _get_str("SUPABASE_URL", "")
-SUPABASE_KEY = _get_str("SUPABASE_KEY", "")
-SUPABASE_SERVICE_ROLE_KEY = _get_str("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_KEY = _get_str("SUPABASE_KEY", _get_str("SUPABASE_ANON_KEY", _get_str("SUPABASE_PUBLISHABLE_KEY", "")))
+SUPABASE_SERVICE_ROLE_KEY = _get_str("SUPABASE_SERVICE_ROLE_KEY", _get_str("SUPABASE_SECRET_KEY", ""))
+SUPABASE_DB_URL = _get_str("SUPABASE_DB_URL", _get_str("DATABASE_URL", ""))
 SUPABASE_TIMEOUT = max(3.0, _get_float("SUPABASE_TIMEOUT", 15.0))
 SUPABASE_SCHEMA = _get_str("SUPABASE_SCHEMA", "public")
 
@@ -176,8 +213,14 @@ SUPABASE_PREMIUM_TABLE = _get_str("SUPABASE_PREMIUM_TABLE", "premium_users")
 SUPABASE_TASKS_TABLE = _get_str("SUPABASE_TASKS_TABLE", "tasks")
 SUPABASE_STATS_TABLE = _get_str("SUPABASE_STATS_TABLE", "bot_stats")
 SUPABASE_BROADCAST_TABLE = _get_str("SUPABASE_BROADCAST_TABLE", "broadcast_logs")
+SUPABASE_BANNED_TABLE = _get_str("SUPABASE_BANNED_TABLE", "banned_users")
+SUPABASE_INDEX_TABLE = _get_str("SUPABASE_INDEX_TABLE", "index_entries")
+SUPABASE_FAILED_TASKS_TABLE = _get_str("SUPABASE_FAILED_TASKS_TABLE", "failed_tasks")
 SUPABASE_DESTINATIONS_TABLE = _get_str("SUPABASE_DESTINATIONS_TABLE", "user_destinations")
 SUPABASE_AUDIT_TABLE = _get_str("SUPABASE_AUDIT_TABLE", "task_audit_logs")
+SUPABASE_USER_LIMITS_TABLE = _get_str("SUPABASE_USER_LIMITS_TABLE", "user_limits")
+SUPABASE_SESSIONS_TABLE = _get_str("SUPABASE_SESSIONS_TABLE", "user_sessions")
+SUPABASE_INDEX_STATE_TABLE = _get_str("SUPABASE_INDEX_STATE_TABLE", "index_state")
 
 
 # =========================================================
@@ -219,6 +262,10 @@ STORE_TASK_AUDIT_LOG = _get_bool("STORE_TASK_AUDIT_LOG", True)
 TASK_DEBUG_MAX_ENTRIES = max(10, _get_int("TASK_DEBUG_MAX_ENTRIES", 200))
 ENABLE_TASK_SCHEMA_NORMALIZATION = _get_bool("ENABLE_TASK_SCHEMA_NORMALIZATION", True)
 TASK_CARD_HIDE_DELAY = max(0, _get_int("TASK_CARD_HIDE_DELAY", 8))
+TEMP_FILE_RETENTION_HOURS = max(1, _get_int("TEMP_FILE_RETENTION_HOURS", 12))
+BACKUP_RETENTION_COUNT = max(1, _get_int("BACKUP_RETENTION_COUNT", 15))
+ENABLE_STORAGE_MAINTENANCE = _get_bool("ENABLE_STORAGE_MAINTENANCE", True)
+STORAGE_MAINTENANCE_INTERVAL_SECONDS = max(60, _get_int("STORAGE_MAINTENANCE_INTERVAL_SECONDS", 900))
 
 
 # =========================================================

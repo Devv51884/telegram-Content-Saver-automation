@@ -8,7 +8,7 @@ from pyrogram import idle
 
 from app import run_web, set_runtime_state
 from bot import app, ensure_background_workers_started
-from storage import sync_local_persistent_data_to_supabase
+from storage import initialize_storage, sync_local_persistent_data_to_supabase
 
 
 BOT_STARTUP_MODE = "web+bot"
@@ -19,6 +19,7 @@ def start_bot():
     set_runtime_state(False, username="unknown", mode=BOT_STARTUP_MODE)
 
     try:
+        initialize_storage()
         app.start()
         app.loop.run_until_complete(ensure_background_workers_started(app))
         try:

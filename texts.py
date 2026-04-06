@@ -12,6 +12,7 @@ from storage import (
     get_user_task_limit,
     get_user_plan_name,
     get_user_plan_features,
+    get_caption_settings_for_mode,
 )
 
 APP_VERSION_LABEL = "V12"
@@ -165,6 +166,10 @@ def help_text(is_admin: bool = False):
             "",
             "**Admin Commands**",
             "/stats",
+            "/supabase_status",
+            "/storage_status",
+            "/backup",
+            "/restore latest",
             "/users",
             "/recent_users",
             "/ban user_id",
@@ -245,6 +250,10 @@ def admin_panel_text():
         "Yahan se admin-related controls, premium management, plan settings aur broadcast/help actions access kiye ja sakte hain.\n\n"
         "**Useful Commands:**\n"
         "/stats\n"
+        "/supabase_status\n"
+        "/storage_status\n"
+        "/backup\n"
+        "/restore latest\n"
         "/users\n"
         "/recent_users\n"
         "/ban user_id\n"
@@ -377,9 +386,16 @@ def thumbnail_text(user_id: int):
 
 def caption_text(user_id: int):
     s = get_user_settings(user_id)
-    current = s.get("caption_text") or "None"
+    storage_mode = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
+    caption_state = get_caption_settings_for_mode(s, storage_mode)
+    current = caption_state.get("text") or "None"
     padding = s.get("caption_index_padding", 2)
     start = s.get("caption_index_start", 1)
+    mode_note = "Telegram mode me ye sent caption banega."
+    if storage_mode == "gdrive":
+        mode_note = "Google Drive mode me ye file description ke roop me save hoga."
+    elif storage_mode == "rclone":
+        mode_note = "Rclone mode me ye `.caption.txt` sidecar file me save hoga."
 
     return (
         "📝 **Caption Setting**\n\n"
@@ -402,9 +418,12 @@ def caption_text(user_id: int):
         "<u>Underline</u>\n"
         "<code>Monospace</code>\n"
         "<a href='https://t.me/Code_Devil'>Link</a>\n\n"
+        f"Current Mode: **{storage_mode.title()}**\n"
+        f"Current Status: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**\n\n"
         f"Current caption:\n`{current}`\n\n"
         "Example caption:\n"
         "`<b>{index}</b> | {filename}`\n\n"
+        f"{mode_note}\n\n"
         "HTML tags use kar sakte ho. Timeout: 60 sec"
     )
 
@@ -1231,6 +1250,7 @@ def id_info_text(chat, topic_id: int | None = None):
 def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
     storage_mode = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
+    caption_state = get_caption_settings_for_mode(s, storage_mode)
     storage_mode_label = _storage_mode_display(storage_mode)
     upload_mode = _upload_mode_display(s.get("telegram_upload_mode", s.get("upload_mode", "media"))).upper()
     messages_saved = get_index_user_count(user_id)
@@ -1256,6 +1276,7 @@ def settings_home_text(user_id: int):
         lines.extend([
             f"GDrive Token is **{_exists_text(s.get('gdrive_token_path'))}**",
             f"Folder ID is **{_safe_text(s.get('gdrive_folder_id'))}**",
+            f"Drive Description Caption is **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
         ])
         if s.get("gdrive_last_file_link"):
             lines.append(f"Last GDrive Link is **{_safe_text(s.get('gdrive_last_file_link'))}**")
@@ -1268,6 +1289,7 @@ def settings_home_text(user_id: int):
         lines.extend([
             f"Rclone Config is **{_exists_text(s.get('rclone_config_path'))}**",
             f"Rclone Path is **{_safe_text(s.get('rclone_remote_path'))}**",
+            f"Caption Sidecar is **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
         ])
         if s.get("rclone_last_file_path"):
             lines.append(f"Last Rclone Target is **{_safe_text(s.get('rclone_last_file_path'))}**")
@@ -1310,31 +1332,37 @@ def upload_mode_text(user_id: int = 0):
 
 def gdrive_text(user_id: int):
     s = get_user_settings(user_id)
+    caption_state = get_caption_settings_for_mode(s, "gdrive")
     return "\n".join([
         "**Google Drive Settings**",
         "",
         f"Folder ID: **{_safe_text(s.get('gdrive_folder_id'))}**",
         f"Token File: **{_exists_text(s.get('gdrive_token_path'))}**",
         f"Last Link: **{_safe_text(s.get('gdrive_last_file_link'))}**",
+        f"Caption Description: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
         "",
         "1. token.pickle bhejo",
         "2. Folder ID set karo",
         "3. Storage Mode ko Google Drive select karo",
+        "4. Set Caption se Drive description customize kar sakte ho",
     ])
 
 
 def rclone_text(user_id: int):
     s = get_user_settings(user_id)
+    caption_state = get_caption_settings_for_mode(s, "rclone")
     return "\n".join([
         "**Rclone Settings**",
         "",
         f"Config File: **{_exists_text(s.get('rclone_config_path'))}**",
         f"Remote Path: **{_safe_text(s.get('rclone_remote_path'))}**",
         f"Last Target: **{_safe_text(s.get('rclone_last_file_path'))}**",
+        f"Caption Sidecar: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
         "",
         "1. rclone.conf bhejo",
         "2. Remote path set karo",
         "3. Storage Mode ko Rclone select karo",
+        "4. Set Caption se `.caption.txt` sidecar save kar sakte ho",
     ])
 
 

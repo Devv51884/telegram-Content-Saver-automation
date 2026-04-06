@@ -795,12 +795,18 @@ def settings_home_buttons(
                 InlineKeyboardButton(f"{marks.get('gdrive_token', '❌')} token.pickle", callback_data="set_gdrive_token_file"),
                 InlineKeyboardButton(f"{marks.get('gdrive_folder', '❌')} Folder ID", callback_data="set_gdrive_folder_id"),
             ],
+            [
+                InlineKeyboardButton(f"{marks.get('caption', '❌')} Set Caption", callback_data="show_caption"),
+            ],
         ])
     elif storage_mode == "rclone":
         rows.extend([
             [
                 InlineKeyboardButton(f"{marks.get('rclone_config', '❌')} Rclone Config", callback_data="set_rclone_config_file"),
                 InlineKeyboardButton(f"{marks.get('rclone_path', '❌')} Rclone Path", callback_data="set_rclone_remote_path"),
+            ],
+            [
+                InlineKeyboardButton(f"{marks.get('caption', '❌')} Set Caption", callback_data="show_caption"),
             ],
         ])
 
