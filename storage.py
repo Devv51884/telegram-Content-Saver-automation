@@ -1310,10 +1310,12 @@ def get_user_allowed_storage_modes(user_id: int):
         return raw
     plan_name = str(get_premium_record(user_id).get("plan_name", "") or "").strip().lower()
     if plan_name == "pro":
-        return list(PRO_STORAGE_MODES)
+        return list(dict.fromkeys([*PRO_STORAGE_MODES, "telegram", "gdrive", "rclone", "personal_bot"]))
     if is_premium_user(user_id):
-        return list(PREMIUM_STORAGE_MODES)
-    return list(FREE_STORAGE_MODES)
+        return list(dict.fromkeys([*PREMIUM_STORAGE_MODES, "telegram", "gdrive", "rclone"]))
+    # Keep the core storage routes available by default so UI toggles do not look broken
+    # when a deployment forgets to expose the newer storage-mode env values.
+    return list(dict.fromkeys([*FREE_STORAGE_MODES, "telegram", "gdrive", "rclone"]))
 
 
 def user_can_use_storage_mode(user_id: int, storage_mode: str) -> bool:

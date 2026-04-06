@@ -302,7 +302,7 @@ ENABLE_DESTINATIONS_PANEL = _get_bool("ENABLE_DESTINATIONS_PANEL", True)
 # =========================================================
 # STORAGE PLANS / ROUTING
 # =========================================================
-FREE_STORAGE_MODES = [item.strip().lower() for item in _get_str("FREE_STORAGE_MODES", "telegram").split(",") if item.strip()] or ["telegram"]
+FREE_STORAGE_MODES = [item.strip().lower() for item in _get_str("FREE_STORAGE_MODES", "telegram,gdrive,rclone").split(",") if item.strip()] or ["telegram", "gdrive", "rclone"]
 PREMIUM_STORAGE_MODES = [item.strip().lower() for item in _get_str("PREMIUM_STORAGE_MODES", "telegram,gdrive,rclone").split(",") if item.strip()] or ["telegram", "gdrive", "rclone"]
 PRO_STORAGE_MODES = [item.strip().lower() for item in _get_str("PRO_STORAGE_MODES", "telegram,gdrive,rclone,personal_bot").split(",") if item.strip()] or ["telegram", "gdrive", "rclone", "personal_bot"]
 DEFAULT_STORAGE_MODE = _get_str("DEFAULT_STORAGE_MODE", "telegram").strip().lower() or "telegram"

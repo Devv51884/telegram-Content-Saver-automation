@@ -1241,7 +1241,7 @@ def settings_home_text(user_id: int):
         f"**Settings for {APP_NAME}**",
         "",
         f"Messages Saved: **{messages_saved}**",
-        f"Upload Mode: **{storage_mode_label}**",
+        f"Storage Mode: **{storage_mode_label}**",
         "",
     ]
 
@@ -1319,7 +1319,7 @@ def gdrive_text(user_id: int):
         "",
         "1. token.pickle bhejo",
         "2. Folder ID set karo",
-        "3. Upload Mode ko Google Drive select karo",
+        "3. Storage Mode ko Google Drive select karo",
     ])
 
 
@@ -1334,7 +1334,7 @@ def rclone_text(user_id: int):
         "",
         "1. rclone.conf bhejo",
         "2. Remote path set karo",
-        "3. Upload Mode ko Rclone select karo",
+        "3. Storage Mode ko Rclone select karo",
     ])
 
 
@@ -1360,7 +1360,7 @@ def advanced_settings_text(user_id: int):
         "**Advanced Settings**",
         "",
         f"Plan: **{_plan_display(user_id)}**",
-        f"Upload Mode: **{_storage_mode_display(s.get('storage_mode', 'telegram'))}**",
+        f"Storage Mode: **{_storage_mode_display(s.get('storage_mode', 'telegram'))}**",
         f"Authorized Login: **{'Connected' if has_user_session(user_id) else 'Not Connected'}**",
         f"Personal Bot: **{_exists_text(s.get('personal_bot_token'))}**",
         f"Route Template: **{_safe_text(s.get('route_template'), 'off')}**",
@@ -1369,7 +1369,7 @@ def advanced_settings_text(user_id: int):
         f"Batch Limit: **{get_user_batch_limit(user_id)}**",
         f"Task Limit: **{get_user_task_limit(user_id)}**",
         "",
-        "Upload Mode switching aur common save controls home screen par available hain.",
+        "Storage Mode switching aur common save controls home screen par available hain.",
         "Yahan sirf advanced saver features aur helper pages dikhte hain.",
     ]
     return "\n".join(lines)

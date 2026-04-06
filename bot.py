@@ -2172,6 +2172,51 @@ def build_upload_mode_message(user_id: int):
     return upload_mode_text(user_id)
 
 
+TELEGRAM_ONLY_SETTINGS_CALLBACKS = {
+    "show_upload_mode",
+    "show_telegram_upload_mode",
+    "toggle_upload_mode",
+    "toggle_upload_mode_legacy",
+    "show_thumbnail",
+    "toggle_thumbnail_enabled",
+    "set_thumbnail_photo",
+    "remove_thumbnail",
+    "show_caption",
+    "toggle_caption_enabled",
+    "show_caption_index_settings",
+    "toggle_caption_index_enabled",
+    "set_caption_index_padding",
+    "set_caption_index_start",
+    "set_caption_text",
+    "remove_caption",
+    "show_destination",
+    "set_destination",
+    "remove_destination",
+    "clear_destination",
+    "show_topic_id",
+    "set_topic_id",
+    "remove_topic_id",
+    "clear_topic_id",
+}
+TELEGRAM_ONLY_SETTINGS_PREFIXES = ("set_upload_mode:",)
+
+
+def is_telegram_only_settings_callback(data: str) -> bool:
+    data = str(data or "").strip()
+    if data in TELEGRAM_ONLY_SETTINGS_CALLBACKS:
+        return True
+    return any(data.startswith(prefix) for prefix in TELEGRAM_ONLY_SETTINGS_PREFIXES)
+
+
+def build_storage_mode_locked_callback_text(storage_mode: str) -> str:
+    storage_mode = normalize_storage_mode(storage_mode)
+    if storage_mode == "gdrive":
+        return "Google Drive mode me ye Telegram-only setting apply nahi hoti. Token, Folder ID, Auto Rename aur Replace Rules use karo."
+    if storage_mode == "rclone":
+        return "Rclone mode me ye Telegram-only setting apply nahi hoti. Rclone Config, Path, Auto Rename aur Replace Rules use karo."
+    return "Ye setting abhi current storage mode me apply nahi hoti."
+
+
 def _task_stage_label_for_batch(task: dict) -> str:
     stage = str((task or {}).get("current_stage") or (task or {}).get("status") or "checking").strip().lower()
     mapping = {
@@ -2597,18 +2642,18 @@ def build_missing_storage_target_text(settings: dict | None) -> str:
         has_folder = bool(str(settings.get("gdrive_folder_id", "") or "").strip())
         if not has_token and not has_folder:
             return (
-                "☁️ Google Drive Upload Mode selected hai.\n\n"
+                "☁️ Google Drive Storage Mode selected hai.\n\n"
                 "Pehle `token.pickle` aur `Folder ID` set karo.\n"
                 "/settings → token.pickle aur Folder ID"
             )
         if not has_token:
             return (
-                "☁️ Google Drive Upload Mode selected hai.\n\n"
+                "☁️ Google Drive Storage Mode selected hai.\n\n"
                 "Pehle `token.pickle` set karo.\n"
                 "/settings → token.pickle"
             )
         return (
-            "☁️ Google Drive Upload Mode selected hai.\n\n"
+            "☁️ Google Drive Storage Mode selected hai.\n\n"
             "Pehle `Folder ID` set karo.\n"
             "/settings → Folder ID"
         )
@@ -2618,18 +2663,18 @@ def build_missing_storage_target_text(settings: dict | None) -> str:
         has_remote_path = bool(str(settings.get("rclone_remote_path", "") or "").strip())
         if not has_config and not has_remote_path:
             return (
-                "🗂 Rclone Upload Mode selected hai.\n\n"
+                "🗂 Rclone Storage Mode selected hai.\n\n"
                 "Pehle `rclone.conf` aur `Rclone Path` set karo.\n"
                 "/settings → Rclone Config aur Rclone Path"
             )
         if not has_config:
             return (
-                "🗂 Rclone Upload Mode selected hai.\n\n"
+                "🗂 Rclone Storage Mode selected hai.\n\n"
                 "Pehle `rclone.conf` set karo.\n"
                 "/settings → Rclone Config"
             )
         return (
-            "🗂 Rclone Upload Mode selected hai.\n\n"
+            "🗂 Rclone Storage Mode selected hai.\n\n"
             "Pehle `Rclone Path` set karo.\n"
             "/settings → Rclone Path"
         )
@@ -4676,6 +4721,19 @@ async def all_callbacks(client, callback_query):
 
     cleanup_expired_premium_users()
     s = get_user_settings(user_id)
+    storage_mode = normalize_storage_mode(s.get("storage_mode", "telegram"))
+
+    if storage_mode != "telegram" and is_telegram_only_settings_callback(data):
+        try:
+            await callback_query.message.edit_text(
+                settings_home_text(user_id),
+                reply_markup=build_settings_home_markup(user_id),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer(build_storage_mode_locked_callback_text(storage_mode), show_alert=True)
+        return
 
     if data == "admin_stats":
         if not is_admin(user_id):
@@ -4727,6 +4785,13 @@ async def all_callbacks(client, callback_query):
     if data == "cycle_storage_mode":
         current_mode = normalize_storage_mode(s.get("storage_mode", "telegram"))
         allowed = [mode for mode in ["telegram", "gdrive", "rclone"] if user_can_use_storage_mode(user_id, mode)] or ["telegram"]
+        if len(allowed) == 1 and current_mode == allowed[0]:
+            only_mode = allowed[0]
+            await callback_query.answer(
+                f"Storage Mode abhi {only_mode} par locked hai. Allowed: {', '.join(allowed)}",
+                show_alert=True,
+            )
+            return
         new_mode = get_next_allowed_storage_mode(current_mode, allowed)
         update_user_settings(user_id, {"storage_mode": new_mode})
         updated_settings = get_user_settings(user_id)
@@ -4735,7 +4800,7 @@ async def all_callbacks(client, callback_query):
         except Exception:
             pass
         reminder = build_missing_storage_target_text(updated_settings) if new_mode in {"gdrive", "rclone"} else ""
-        answer_text = f"Upload Mode: {new_mode}"
+        answer_text = f"Storage Mode: {new_mode}"
         if reminder:
             answer_text = reminder.replace("`", "")
         await callback_query.answer(answer_text[:180], show_alert=bool(reminder))
@@ -4753,7 +4818,7 @@ async def all_callbacks(client, callback_query):
         except Exception:
             pass
         reminder = build_missing_storage_target_text(updated_settings) if mode in {"gdrive", "rclone"} else ""
-        answer_text = f"Upload Mode: {mode}"
+        answer_text = f"Storage Mode: {mode}"
         if reminder:
             answer_text = reminder.replace("`", "")
         await callback_query.answer(answer_text[:180], show_alert=bool(reminder))
@@ -4788,6 +4853,12 @@ async def all_callbacks(client, callback_query):
             await callback_query.message.edit_text(personal_bot_text(user_id), reply_markup=personal_bot_buttons(bool(s.get("personal_bot_token")), str(s.get("bot_delivery_mode", "main")).lower()=="personal"), disable_web_page_preview=True)
         except Exception:
             pass
+        await callback_query.answer()
+        return
+
+    if data == "set_personal_bot_token":
+        set_user_state(user_id, "set_personal_bot_token")
+        await callback_query.message.reply_text("🤖 Ab BotFather wala bot token bhejo.\nExample: `123456:ABCDEF...`\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return
 
@@ -5432,7 +5503,7 @@ async def all_callbacks(client, callback_query):
         await callback_query.answer()
         return
 
-    if data == "admin_plan_help":
+    elif data == "admin_plan_help":
         if not is_admin(user_id):
             await callback_query.answer("Only admin", show_alert=True)
             return
@@ -5827,6 +5898,24 @@ async def catch_all(client, message):
 
             if setting_key == "topic_id" and value and not value.lstrip("-").isdigit():
                 await message.reply_text("❌ Topic ID sirf number hona chahiye.\n/cancel bhej kar cancel kar sakte ho.")
+                return
+
+            if setting_key == "personal_bot_token":
+                try:
+                    me = await validate_personal_bot_token(user_id, value)
+                    await cleanup_personal_bot_client(user_id)
+                    update_user_settings(
+                        user_id,
+                        {
+                            "personal_bot_token": value,
+                            "personal_bot_username": getattr(me, "username", "") or "",
+                            "bot_delivery_mode": "personal",
+                        },
+                    )
+                    clear_user_state(user_id)
+                    await message.reply_text(f"✅ Personal bot save ho gaya: @{getattr(me, 'username', 'unknown')}\n\n/settings bhejo dekhne ke liye.")
+                except Exception as e:
+                    await message.reply_text(f"❌ Personal bot invalid: {e}\n\n/cancel bhej kar cancel kar sakte ho.")
                 return
 
             if setting_key == "replace_words":

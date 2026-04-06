@@ -772,7 +772,7 @@ def settings_home_buttons(
     toggle_upload_label = "Send As Media" if current_upload_mode == "document" else "Send As Document"
 
     rows = [
-        [InlineKeyboardButton(f"{marks.get('storage_mode', '📨')} Upload Mode | {current_storage_label}", callback_data="cycle_storage_mode")],
+        [InlineKeyboardButton(f"{marks.get('storage_mode', '📨')} Storage Mode | {current_storage_label}", callback_data="cycle_storage_mode")],
     ]
 
     if storage_mode == "telegram":
@@ -912,7 +912,7 @@ def storage_mode_buttons(current_mode: str = "telegram", allowed_modes: list[str
     ]
 
     rows = [
-        [InlineKeyboardButton(f"Upload Mode | {_storage_mode_label(current_mode)}", callback_data="noop")],
+        [InlineKeyboardButton(f"Storage Mode | {_storage_mode_label(current_mode)}", callback_data="noop")],
         mode_buttons,
         [InlineKeyboardButton("Quick Cycle", callback_data="cycle_storage_mode")],
         [InlineKeyboardButton("Back", callback_data="show_advanced_settings"), InlineKeyboardButton("Close", callback_data="close_settings")],
