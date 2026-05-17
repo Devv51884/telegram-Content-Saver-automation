@@ -78,8 +78,15 @@ def start_bot():
         try:
             sync_info = sync_local_persistent_data_to_supabase()
             if sync_info.get("enabled"):
-                synced = ", ".join(sync_info.get("synced") or [])
-                print(f"[supabase] Startup sync: {synced or 'no local maps'}")
+                details = sync_info.get("details") if isinstance(sync_info.get("details"), dict) else {}
+                summary_bits = []
+                for label in sync_info.get("synced") or []:
+                    row = details.get(label, {}) if isinstance(details.get(label), dict) else {}
+                    summary_bits.append(f"{label}={int(row.get('synced', 0) or 0)}")
+                print(f"[supabase] Startup sync: {', '.join(summary_bits) or 'no local maps'}")
+                errors = sync_info.get("errors") or []
+                if errors:
+                    print(f"[supabase] Startup sync errors: {' | '.join(errors[:5])}")
         except Exception as sync_exc:
             print(f"[supabase] Startup sync skipped: {sync_exc}")
 

@@ -1434,31 +1434,49 @@ def _coerce_supabase_key_value(table: str, value):
 
 def _sync_full_local_map_to_supabase(path: str, table: str, key_name: str, normalizer):
     if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
-        return
+        return {"total": 0, "prepared": 0, "skipped": 0, "synced": 0, "disabled": True}
     local_map = _load_local_map(path)
     rows = []
+    skipped = 0
     for raw_key, raw_value in local_map.items():
         try:
             typed_key = _coerce_supabase_key_value(table, raw_key)
             rows.append(normalizer(typed_key, raw_value))
         except Exception:
+            skipped += 1
             continue
     if rows:
         _upsert_rows(table, rows, conflict_columns=key_name)
+    return {
+        "total": len(local_map),
+        "prepared": len(rows),
+        "skipped": skipped,
+        "synced": len(rows),
+        "disabled": False,
+    }
 
 
 def _replace_full_local_map_on_supabase(path: str, table: str, normalizer):
     if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
-        return
+        return {"total": 0, "prepared": 0, "skipped": 0, "synced": 0, "disabled": True}
     local_map = _load_local_map(path)
     rows = []
+    skipped = 0
     for raw_key, raw_value in local_map.items():
         try:
             typed_key = _coerce_supabase_key_value(table, raw_key)
             rows.append(normalizer(typed_key, raw_value))
         except Exception:
+            skipped += 1
             continue
     _replace_table_rows(table, rows)
+    return {
+        "total": len(local_map),
+        "prepared": len(rows),
+        "skipped": skipped,
+        "synced": len(rows),
+        "disabled": False,
+    }
 
 
 def _get_hybrid_map(path: str, table: str, key_name: str, normalizer, prefer_local: bool = False, prefer_newer_by: str | None = None):
@@ -2534,13 +2552,16 @@ def _sync_local_banned_users_to_supabase(prune_missing: bool = False):
         _replace_table_rows(SUPABASE_BANNED_TABLE, rows)
     elif rows:
         _upsert_rows(SUPABASE_BANNED_TABLE, rows, conflict_columns="user_id")
+    return {"total": len(clean), "prepared": len(rows), "skipped": 0, "synced": len(rows), "disabled": False}
 
 
 def _sync_local_index_entries_to_supabase(prune_missing: bool = False):
     data = _load_local_list(INDEX_FILE)
     rows = []
+    skipped = 0
     for offset, row in enumerate(data, start=1):
         if not isinstance(row, dict):
+            skipped += 1
             continue
         index_no = max(1, _to_int(row.get("index_no", offset), offset))
         rows.append(_normalize_index_entry_record(index_no, row))
@@ -2548,6 +2569,36 @@ def _sync_local_index_entries_to_supabase(prune_missing: bool = False):
         _replace_table_rows(SUPABASE_INDEX_TABLE, rows)
     elif rows:
         _upsert_rows(SUPABASE_INDEX_TABLE, rows, conflict_columns="index_no")
+    return {"total": len(data), "prepared": len(rows), "skipped": skipped, "synced": len(rows), "disabled": False}
+
+
+def _sync_local_stats_to_supabase():
+    stats = _normalize_stats(load_json(STATS_FILE, DEFAULT_STATS))
+    payload = dict(stats or {})
+    payload["id"] = 1
+    _upsert_rows(SUPABASE_STATS_TABLE, payload, conflict_columns="id")
+    return {"total": 1, "prepared": 1, "skipped": 0, "synced": 1, "disabled": False}
+
+
+def _sync_local_broadcast_logs_to_supabase(prune_missing: bool = False):
+    logs = load_json(BROADCAST_LOG_FILE, [])
+    if not isinstance(logs, list):
+        logs = []
+    rows = []
+    skipped = 0
+    for row in logs:
+        try:
+            clean = dict(row or {})
+            clean["created_at"] = str(clean.get("created_at") or _utcnow_naive_iso())
+            rows.append(clean)
+        except Exception:
+            skipped += 1
+            continue
+    if prune_missing:
+        _replace_table_rows(SUPABASE_BROADCAST_TABLE, rows)
+    elif rows:
+        _upsert_rows(SUPABASE_BROADCAST_TABLE, rows, conflict_columns="created_at")
+    return {"total": len(logs), "prepared": len(rows), "skipped": skipped, "synced": len(rows), "disabled": False}
 
 
 def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: bool = False):
@@ -2557,17 +2608,25 @@ def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: b
     schema_state = ensure_supabase_schema(force=force)
     synced = []
     errors = []
-    map_sync_fn = _replace_full_local_map_on_supabase if prune_missing else _sync_full_local_map_to_supabase
+    details = {}
+
+    def _run_map_sync(path: str, table: str, key_name: str, normalizer):
+        if prune_missing:
+            return _replace_full_local_map_on_supabase(path, table, normalizer)
+        return _sync_full_local_map_to_supabase(path, table, key_name, normalizer)
+
     sync_jobs = [
-        ("users", map_sync_fn, USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record),
-        ("settings", map_sync_fn, SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record),
-        ("state", map_sync_fn, STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record),
-        ("premium", map_sync_fn, PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record),
-        ("tasks", map_sync_fn, TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record),
-        ("user_limits", map_sync_fn, USER_LIMITS_FILE, SUPABASE_USER_LIMITS_TABLE, "user_id", _normalize_user_limit_record),
-        ("sessions", map_sync_fn, SESSION_STORE_FILE, SUPABASE_SESSIONS_TABLE, "user_id", _normalize_session_record),
-        ("index_state", map_sync_fn, INDEX_STATE_FILE, SUPABASE_INDEX_STATE_TABLE, "user_id", _normalize_index_state_record),
-        ("failed_tasks", map_sync_fn, FAILED_TASKS_FILE, SUPABASE_FAILED_TASKS_TABLE, "task_id", _normalize_failed_task_record),
+        ("users", _run_map_sync, USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record),
+        ("settings", _run_map_sync, SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record),
+        ("state", _run_map_sync, STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record),
+        ("premium", _run_map_sync, PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record),
+        ("tasks", _run_map_sync, TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record),
+        ("user_limits", _run_map_sync, USER_LIMITS_FILE, SUPABASE_USER_LIMITS_TABLE, "user_id", _normalize_user_limit_record),
+        ("sessions", _run_map_sync, SESSION_STORE_FILE, SUPABASE_SESSIONS_TABLE, "user_id", _normalize_session_record),
+        ("index_state", _run_map_sync, INDEX_STATE_FILE, SUPABASE_INDEX_STATE_TABLE, "user_id", _normalize_index_state_record),
+        ("failed_tasks", _run_map_sync, FAILED_TASKS_FILE, SUPABASE_FAILED_TASKS_TABLE, "task_id", _normalize_failed_task_record),
+        ("stats", _sync_local_stats_to_supabase),
+        ("broadcast_logs", _sync_local_broadcast_logs_to_supabase, prune_missing),
         ("banned", _sync_local_banned_users_to_supabase, prune_missing),
         ("index_entries", _sync_local_index_entries_to_supabase, prune_missing),
     ]
@@ -2575,12 +2634,28 @@ def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: b
     for job in sync_jobs:
         label, sync_fn, *args = job
         try:
-            sync_fn(*args)
+            result = sync_fn(*args)
+            if isinstance(result, dict):
+                details[label] = result
+            else:
+                details[label] = {"synced": 0}
             synced.append(label)
         except Exception as error:
             errors.append(f"{label}: {error}")
+            details[label] = {"error": str(error)}
 
-    return {"enabled": True, "synced": synced, "errors": errors, "schema_state": schema_state}
+    try:
+        summary_bits = []
+        for label in synced:
+            info = details.get(label, {}) if isinstance(details.get(label, {}), dict) else {}
+            summary_bits.append(f"{label}={int(info.get('synced', 0) or 0)}")
+        debug_log("Supabase sync summary: " + ", ".join(summary_bits))
+        if errors:
+            debug_log("Supabase sync errors: " + " | ".join(errors[:10]))
+    except Exception:
+        pass
+
+    return {"enabled": True, "synced": synced, "errors": errors, "schema_state": schema_state, "details": details}
 
 
 def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):
