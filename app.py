@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+
 from flask import Flask, jsonify, render_template, request
 
 from config import APP_NAME, WEB_HOST, WEB_PORT, HEALTH_TOKEN
@@ -29,7 +30,7 @@ def home():
         )
     except Exception:
         status = "running" if app_started else "starting"
-        return f"{APP_NAME} {version} is {status} 🚀"
+        return f"{APP_NAME} {version} is {status}"
 
 
 def _authorized() -> bool:
@@ -105,7 +106,7 @@ def set_runtime_state(
 
 
 def run_web():
-    print(f"🌐 Web server running on {WEB_HOST}:{WEB_PORT}")
+    print(f"[web] Running on {WEB_HOST}:{WEB_PORT}")
     flask_app.run(
         host=WEB_HOST,
         port=WEB_PORT,

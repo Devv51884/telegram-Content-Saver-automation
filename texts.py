@@ -1,4 +1,5 @@
 from config import APP_NAME, DEFAULT_PREMIUM_PLAN_NAME
+from features.format_helpers import human_bytes, human_eta, human_speed
 from storage import (
     get_user_settings,
     get_index_user_count,
@@ -302,61 +303,6 @@ def admin_premium_help_text():
     )
 
 
-def settings_home_text(user_id: int):
-    s = get_user_settings(user_id)
-    login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
-    batch_status = "Enabled ✅" if is_batch_mode(user_id) else "Disabled ❌"
-    storage_mode_key = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
-    storage_mode = _storage_mode_display(storage_mode_key)
-    lines = [
-        "⚙️ **Settings for User**",
-        "",
-        f"Plan: **{_premium_display(user_id)}**",
-        f"Storage Mode: **{storage_mode}**",
-        f"Authorized Login: **{login_status}**",
-        f"Batch Mode: **{batch_status}**",
-        f"Batch Limit: **{get_user_batch_limit(user_id)}**",
-        f"Task Limit: **{get_user_task_limit(user_id)}**",
-        "",
-    ]
-    if storage_mode_key == "telegram":
-        lines.extend([
-            f"Telegram Upload Type: **{_upload_mode_display(s.get('telegram_upload_mode', s.get('upload_mode', 'media')))}**",
-            f"Telegram Destination: **{_safe_text(s.get('upload_destination'))}**",
-            f"Topic ID: **{_safe_text(s.get('topic_id'))}**",
-            "Tip: /id command help guide me diya gaya hai.",
-        ])
-    elif storage_mode_key == "gdrive":
-        lines.extend([
-            f"GDrive Token: **{_exists_text(s.get('gdrive_token_path'))}**",
-            f"GDrive Folder ID: **{_safe_text(s.get('gdrive_folder_id'))}**",
-            f"Last GDrive Link: **{_safe_text(s.get('gdrive_last_file_link'))}**",
-        ])
-    elif storage_mode_key == "rclone":
-        lines.extend([
-            f"Rclone Config: **{_exists_text(s.get('rclone_config_path'))}**",
-            f"Rclone Path: **{_safe_text(s.get('rclone_remote_path'))}**",
-            f"Last Rclone Target: **{_safe_text(s.get('rclone_last_file_path'))}**",
-        ])
-    lines.extend([
-        "",
-        f"Custom Thumbnail: **{_exists_text(s.get('thumbnail_file_id'))}**",
-        f"Caption: **{'Enabled ✅' if s.get('caption_enabled') else 'Disabled ❌'}**",
-        f"Prefix: **{_safe_text(s.get('prefix'))}**",
-        f"Suffix: **{_safe_text(s.get('suffix'))}**",
-        f"Auto Rename: **{_safe_text(s.get('auto_rename'))}**",
-        f"Rename Template: **{_safe_text(s.get('rename_template'))}**",
-        f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**",
-        f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**",
-        f"Metadata: **{'Enabled ✅' if s.get('metadata_enabled') else 'Disabled ❌'}**",
-        f"Replace Words: **{_safe_text(s.get('replace_words'))}**",
-        f"Index Mode: **{_yes_no_enabled(is_index_mode(user_id))}**",
-        "",
-        "Storage Mode button ko tap karke Telegram -> Google Drive -> Rclone dynamically switch kar sakte ho.",
-    ])
-    return "\n".join(lines)
-
-
 def upload_mode_text(user_id: int = 0):
     mode = "Media"
     if user_id:
@@ -567,18 +513,8 @@ def batch_text(user_id: int):
 
 def unknown_text():
     return (
-        "🤖 Mujhe ye commands bhejo:\n\n"
-        "/start\n"
-        "/ping\n"
-        "/help\n"
-        "/plan\n"
-        "/terms\n"
-        "/settings\n"
-        "/login\n"
-        "/login_status\n"
-        "/logout\n"
-        "/my_tasks\n"
-        "/cancel"
+        "❓ Command samajh nahi aayi.\n\n"
+        "/help se command list dekho ya /settings kholo."
     )
 
 
@@ -838,38 +774,15 @@ def _stage_label(task: dict) -> str:
 
 
 def _fmt_bytes(value) -> str:
-    try:
-        value = float(value or 0)
-    except Exception:
-        value = 0.0
-    units = ["B", "KB", "MB", "GB", "TB"]
-    idx = 0
-    while value >= 1024 and idx < len(units) - 1:
-        value /= 1024.0
-        idx += 1
-    return f"{value:.2f} {units[idx]}"
+    return human_bytes(value or 0)
 
 
 def _fmt_speed(value) -> str:
-    try:
-        value = float(value or 0)
-    except Exception:
-        value = 0.0
-    return f"{_fmt_bytes(value)}/s"
+    return human_speed(value or 0)
 
 
 def _fmt_eta(value) -> str:
-    try:
-        seconds = int(float(value or 0))
-    except Exception:
-        seconds = 0
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, sec = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m {sec}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes}m"
+    return human_eta(value or 0)
 
 
 def _fmt_elapsed(value) -> str:
@@ -1081,43 +994,6 @@ def settings_home_text(user_id: int):
     ])
     return "\n".join(lines)
 
-def upload_mode_text(user_id: int = 0):
-    mode = "Media"
-    if user_id:
-        s = get_user_settings(user_id)
-        mode = _upload_mode_display(s.get('telegram_upload_mode', s.get('upload_mode', 'media')))
-    return "\n".join([
-        "📤 **Telegram Upload Mode**",
-        "",
-        f"Current telegram upload mode: **{mode}**",
-        "",
-        "Media mode Telegram destination me media ki tarah send karega.",
-        "",
-        "Document mode Telegram destination me document ki tarah send karega.",
-        "",
-        "Ye setting sirf Telegram storage mode ke liye apply hoti hai.",
-        "Quick Toggle button se turant Media <-> Document switch kar sakte ho.",
-    ])
-
-
-def destination_text(user_id: int):
-    s = get_user_settings(user_id)
-    return "\n".join([
-        "📍 **Telegram Destination Setting**",
-        "",
-        "Yahan chat id ya @channelusername set kar sakte ho.",
-        "",
-        "Examples:",
-        "`-1001234567890`",
-        "`@yourchannelusername`",
-        "",
-        f"Current telegram destination: **{_safe_text(s.get('upload_destination'))}**",
-        f"Current topic id: **{_safe_text(s.get('topic_id'))}**",
-        "",
-        "Tip: Agar bot aapke channel/group me admin hai to /id command se id nikaal sakte ho.",
-    ])
-
-
 def gdrive_text(user_id: int):
     s = get_user_settings(user_id)
     return "\n".join([
@@ -1247,139 +1123,6 @@ def id_info_text(chat, topic_id: int | None = None):
 #
 # V16 UI OVERRIDES
 #
-def settings_home_text(user_id: int):
-    s = get_user_settings(user_id)
-    storage_mode = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
-    caption_state = get_caption_settings_for_mode(s, storage_mode)
-    storage_mode_label = _storage_mode_display(storage_mode)
-    upload_mode = _upload_mode_display(s.get("telegram_upload_mode", s.get("upload_mode", "media"))).upper()
-    messages_saved = get_index_user_count(user_id)
-    file_rules = _safe_text(s.get("replace_words_file") or s.get("replace_words"))
-    caption_rules = _safe_text(s.get("replace_words_caption") or s.get("replace_words"))
-
-    lines = [
-        f"**Settings for {APP_NAME}**",
-        "",
-        f"Messages Saved: **{messages_saved}**",
-        f"Storage Mode: **{storage_mode_label}**",
-        "",
-    ]
-
-    if storage_mode == "telegram":
-        lines.extend([
-            f"Custom Thumbnail is **{_exists_text(s.get('thumbnail_file_id'))}**",
-            f"Telegram Upload Type is **{upload_mode}**",
-            f"Upload Destination is **{_safe_text(s.get('upload_destination'))}**",
-            f"Topic ID is **{_safe_text(s.get('topic_id'))}**",
-        ])
-    elif storage_mode == "gdrive":
-        lines.extend([
-            f"GDrive Token is **{_exists_text(s.get('gdrive_token_path'))}**",
-            f"Folder ID is **{_safe_text(s.get('gdrive_folder_id'))}**",
-            f"Drive Description Caption is **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
-        ])
-        if s.get("gdrive_last_file_link"):
-            lines.append(f"Last GDrive Link is **{_safe_text(s.get('gdrive_last_file_link'))}**")
-        if not s.get("gdrive_token_path") or not s.get("gdrive_folder_id"):
-            lines.extend([
-                "",
-                "Next Step: token.pickle aur Folder ID set karo.",
-            ])
-    elif storage_mode == "rclone":
-        lines.extend([
-            f"Rclone Config is **{_exists_text(s.get('rclone_config_path'))}**",
-            f"Rclone Path is **{_safe_text(s.get('rclone_remote_path'))}**",
-            f"Caption Sidecar is **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
-        ])
-        if s.get("rclone_last_file_path"):
-            lines.append(f"Last Rclone Target is **{_safe_text(s.get('rclone_last_file_path'))}**")
-        if not s.get("rclone_config_path") or not s.get("rclone_remote_path"):
-            lines.extend([
-                "",
-                "Next Step: rclone.conf aur Rclone Path set karo.",
-            ])
-
-    lines.extend([
-        "",
-        f"Prefix is **{_safe_text(s.get('prefix'))}**",
-        f"Suffix is **{_safe_text(s.get('suffix'))}**",
-        f"Metadata is **{_yes_no_enabled(s.get('metadata_enabled'))}**",
-        f"Remove/Replace Words from File is **{file_rules}**",
-        f"Remove/Replace Words from Caption is **{caption_rules}**",
-        f"Auto Rename is **{_safe_text(s.get('auto_rename') or s.get('rename_template'))}**",
-    ])
-    return "\n".join(lines)
-
-
-def upload_mode_text(user_id: int = 0):
-    mode = "Media"
-    if user_id:
-        s = get_user_settings(user_id)
-        mode = _upload_mode_display(s.get("telegram_upload_mode", s.get("upload_mode", "media")))
-    return "\n".join([
-        "**Telegram Send As**",
-        "",
-        f"Current Telegram upload type: **{mode}**",
-        "",
-        "Media mode me bot Telegram destination par media ki tarah send karega.",
-        "",
-        "Document mode me bot Telegram destination par document ki tarah send karega.",
-        "",
-        "Ye setting sirf Telegram Upload Mode ke liye apply hoti hai.",
-        "Quick Toggle button se turant Media <-> Document switch kar sakte ho.",
-    ])
-
-
-def gdrive_text(user_id: int):
-    s = get_user_settings(user_id)
-    caption_state = get_caption_settings_for_mode(s, "gdrive")
-    return "\n".join([
-        "**Google Drive Settings**",
-        "",
-        f"Folder ID: **{_safe_text(s.get('gdrive_folder_id'))}**",
-        f"Token File: **{_exists_text(s.get('gdrive_token_path'))}**",
-        f"Last Link: **{_safe_text(s.get('gdrive_last_file_link'))}**",
-        f"Caption Description: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
-        "",
-        "1. token.pickle bhejo",
-        "2. Folder ID set karo",
-        "3. Storage Mode ko Google Drive select karo",
-        "4. Set Caption se Drive description customize kar sakte ho",
-    ])
-
-
-def rclone_text(user_id: int):
-    s = get_user_settings(user_id)
-    caption_state = get_caption_settings_for_mode(s, "rclone")
-    return "\n".join([
-        "**Rclone Settings**",
-        "",
-        f"Config File: **{_exists_text(s.get('rclone_config_path'))}**",
-        f"Remote Path: **{_safe_text(s.get('rclone_remote_path'))}**",
-        f"Last Target: **{_safe_text(s.get('rclone_last_file_path'))}**",
-        f"Caption Sidecar: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**",
-        "",
-        "1. rclone.conf bhejo",
-        "2. Remote path set karo",
-        "3. Storage Mode ko Rclone select karo",
-        "4. Set Caption se `.caption.txt` sidecar save kar sakte ho",
-    ])
-
-
-def replace_words_text(user_id: int):
-    s = get_user_settings(user_id)
-    return (
-        "Remove / Replace Words\n\n"
-        "Format example:\n"
-        "old1:new1, old2:new2\n\n"
-        "Sirf remove karna ho to:\n"
-        "old1:, old2:\n\n"
-        f"Current file rules: **{_safe_text(s.get('replace_words_file') or s.get('replace_words'))}**\n"
-        f"Current caption rules: **{_safe_text(s.get('replace_words_caption') or s.get('replace_words'))}**\n\n"
-        "File rules filename cleaning me use honge.\n"
-        "Caption rules caption aur text cleaning me use honge.\n"
-        "Send remove/replace rules. Timeout: 60 sec"
-    )
 
 
 def advanced_settings_text(user_id: int):

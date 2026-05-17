@@ -1,17 +1,9 @@
 pyrofork
 python-dotenv
-aiofiles
 flask
 TgCrypto
-# V10 Additions
-httpx
-pytz
-psutil
 
 # Supabase (DB)
-supabase
-postgrest
-
 setuptools
 wheel
 

@@ -11,6 +11,22 @@ from threading import Lock
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+from features.storage_caption_helpers import (
+    CAPTION_MODE_KEYS as _CAPTION_MODE_KEYS,
+    get_caption_setting_keys as _get_caption_setting_keys_impl,
+    get_caption_settings_for_mode as _get_caption_settings_for_mode_impl,
+    normalize_storage_mode_key as _normalize_storage_mode_key_impl,
+)
+from features.storage_marks_helpers import (
+    get_settings_marks_from_settings as _get_settings_marks_from_settings_impl,
+    get_user_storage_mode_from_settings as _get_user_storage_mode_from_settings_impl,
+    get_user_telegram_upload_mode_from_settings as _get_user_telegram_upload_mode_from_settings_impl,
+)
+from features.storage_reporting_helpers import (
+    analyze_batch_input_impl as _analyze_batch_input_impl,
+    get_admin_overview_impl as _get_admin_overview_impl,
+)
+from features.storage_stats_helpers import get_detailed_stats_impl as _get_detailed_stats_impl
 
 from config import (
     SETTINGS_FILE,
@@ -137,11 +153,7 @@ DEFAULT_USER_LIMITS = {
     "allowed_storage_modes": "",
 }
 
-CAPTION_MODE_KEYS = {
-    "telegram": ("telegram_caption_enabled", "telegram_caption_text"),
-    "gdrive": ("gdrive_caption_enabled", "gdrive_caption_text"),
-    "rclone": ("rclone_caption_enabled", "rclone_caption_text"),
-}
+CAPTION_MODE_KEYS = dict(_CAPTION_MODE_KEYS)
 
 DEFAULT_STATS = {
     "started_at": "",
@@ -190,36 +202,46 @@ WAITING_KEYS = {
 
 
 def _normalize_storage_mode_key(value: str) -> str:
-    value = str(value or "telegram").strip().lower()
-    return value if value in CAPTION_MODE_KEYS else "telegram"
+    return _normalize_storage_mode_key_impl(value)
 
 
 def get_caption_setting_keys(storage_mode: str | None = None):
-    return CAPTION_MODE_KEYS[_normalize_storage_mode_key(storage_mode)]
+    return _get_caption_setting_keys_impl(storage_mode)
 
 
 def get_caption_settings_for_mode(settings: dict | None, storage_mode: str | None = None):
-    settings = settings if isinstance(settings, dict) else {}
-    mode = _normalize_storage_mode_key(storage_mode or settings.get("storage_mode", "telegram"))
-    enabled_key, text_key = get_caption_setting_keys(mode)
-    return {
-        "storage_mode": mode,
-        "enabled_key": enabled_key,
-        "text_key": text_key,
-        "enabled": _to_bool(settings.get(enabled_key, False), False),
-        "text": str(settings.get(text_key, "") or "").strip(),
-    }
+    return _get_caption_settings_for_mode_impl(settings, storage_mode)
 
 
 # =========================================================
 # GENERIC HELPERS
 # =========================================================
+def _json_cache_key(path: str) -> str:
+    try:
+        return str(Path(path).resolve())
+    except Exception:
+        return str(path or "")
+
+
+def clear_local_json_cache(path: str | None = None):
+    if path is None:
+        _LOCAL_JSON_CACHE.clear()
+        return
+    _LOCAL_JSON_CACHE.pop(_json_cache_key(path), None)
+
+
 def load_json(path, default):
+    cache_key = _json_cache_key(path)
+    cached = _LOCAL_JSON_CACHE.get(cache_key)
+    if cached is not None:
+        return deepcopy(cached)
     if not os.path.exists(path):
         return deepcopy(default)
     try:
         with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            data = json.load(file)
+            _LOCAL_JSON_CACHE[cache_key] = deepcopy(data)
+            return data
     except Exception:
         return deepcopy(default)
 
@@ -230,6 +252,7 @@ def save_json(path, data):
         os.makedirs(folder, exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=2, ensure_ascii=False)
+    _LOCAL_JSON_CACHE[_json_cache_key(path)] = deepcopy(data)
 
 
 def _to_int(value, default=0):
@@ -281,7 +304,7 @@ def _now_iso() -> str:
 
 
 def _utcnow_naive_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return _now_utc().replace(tzinfo=None).isoformat()
 
 
 def _parse_iso(value):
@@ -315,6 +338,14 @@ _SUPABASE_BOOTSTRAP_ATTEMPTED = False
 _SUPABASE_BOOTSTRAP_STATE = {"enabled": False, "ready": False, "message": "Supabase not configured"}
 _SUPABASE_REST_DISABLED_UNTIL = 0.0
 _SUPABASE_REST_BACKOFF_SECONDS = 300.0
+_SUPABASE_SELECT_CACHE = {}
+_SUPABASE_SELECT_CACHE_TTL_SECONDS = 30.0
+_HYBRID_REMOTE_REFRESH_AT = {}
+_HYBRID_REMOTE_REFRESH_INTERVAL_SECONDS = 60.0
+_REGISTER_USER_WRITE_INTERVAL_SECONDS = 60.0
+_PREMIUM_CLEANUP_INTERVAL_SECONDS = 300.0
+_LAST_PREMIUM_CLEANUP_AT = 0.0
+_LOCAL_JSON_CACHE = {}
 
 SUPABASE_PAYLOAD_TABLE_KEYS = {
     SUPABASE_USERS_TABLE: "id",
@@ -783,6 +814,58 @@ def _mark_supabase_rest_success():
     _SUPABASE_REST_DISABLED_UNTIL = 0.0
 
 
+def _select_cache_key(table: str, filters=None):
+    normalized_filters = tuple(sorted((str(key), str(value)) for key, value in (filters or {}).items()))
+    return (str(table or ""), normalized_filters)
+
+
+def _get_cached_select_rows(table: str, filters=None):
+    cache_key = _select_cache_key(table, filters)
+    cached = _SUPABASE_SELECT_CACHE.get(cache_key)
+    if not cached:
+        return None
+    if (time.time() - float(cached.get("loaded_at", 0.0) or 0.0)) > _SUPABASE_SELECT_CACHE_TTL_SECONDS:
+        _SUPABASE_SELECT_CACHE.pop(cache_key, None)
+        return None
+    return list(cached.get("rows", []) or [])
+
+
+def _store_cached_select_rows(table: str, filters, rows):
+    _SUPABASE_SELECT_CACHE[_select_cache_key(table, filters)] = {
+        "loaded_at": time.time(),
+        "rows": list(rows or []),
+    }
+
+
+def _invalidate_select_cache(table: str):
+    stale_keys = [key for key in _SUPABASE_SELECT_CACHE if key and key[0] == str(table or "")]
+    for key in stale_keys:
+        _SUPABASE_SELECT_CACHE.pop(key, None)
+
+
+def _hybrid_refresh_key(path: str, table: str, key_name: str) -> str:
+    return f"{path}|{table}|{key_name}"
+
+
+def _should_use_local_hybrid_fast_path(path: str, table: str, key_name: str, local_has_data: bool) -> bool:
+    if not (ENABLE_LOCAL_FALLBACK and local_has_data):
+        return False
+    refresh_key = _hybrid_refresh_key(path, table, key_name)
+    now = time.time()
+    last_refresh = float(_HYBRID_REMOTE_REFRESH_AT.get(refresh_key, 0.0) or 0.0)
+    if last_refresh <= 0.0:
+        _HYBRID_REMOTE_REFRESH_AT[refresh_key] = now
+        return True
+    if (now - last_refresh) < _HYBRID_REMOTE_REFRESH_INTERVAL_SECONDS:
+        return True
+    _HYBRID_REMOTE_REFRESH_AT[refresh_key] = now
+    return False
+
+
+def _mark_hybrid_remote_refresh(path: str, table: str, key_name: str):
+    _HYBRID_REMOTE_REFRESH_AT[_hybrid_refresh_key(path, table, key_name)] = time.time()
+
+
 def _supabase_db_read_rows(table: str, filters=None):
     if not _supabase_db_fallback_available(table):
         raise RuntimeError("Supabase DB fallback not available")
@@ -871,6 +954,9 @@ def _build_supabase_filters(filters=None) -> str:
 
 
 def _select_rows(table: str, filters=None):
+    cached_rows = _get_cached_select_rows(table, filters)
+    if cached_rows is not None:
+        return [_decode_supabase_row(table, row) for row in cached_rows]
     select_clause = "*"
     if table in SUPABASE_PAYLOAD_TABLE_KEYS:
         select_clause = f"{_supabase_payload_key(table)},payload"
@@ -885,10 +971,12 @@ def _select_rows(table: str, filters=None):
             rows = _supabase_db_read_rows(table, filters=filters)
     if not isinstance(rows, list):
         return []
+    _store_cached_select_rows(table, filters, rows)
     return [_decode_supabase_row(table, row) for row in rows]
 
 
 def _delete_rows(table: str, filters=None):
+    _invalidate_select_cache(table)
     if not _should_try_supabase_rest(table):
         return _supabase_db_delete_rows(table, filters=filters)
     try:
@@ -905,6 +993,7 @@ def _upsert_rows(table: str, rows, conflict_columns="id"):
         rows = [rows]
     if not rows:
         return []
+    _invalidate_select_cache(table)
     payload_rows = [_prepare_supabase_row(table, row) for row in rows]
     if not _should_try_supabase_rest(table):
         return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
@@ -924,6 +1013,7 @@ def _upsert_rows(table: str, rows, conflict_columns="id"):
 def _replace_table_rows(table: str, rows):
     if not _supabase_enabled():
         return
+    _invalidate_select_cache(table)
     key_name = _supabase_payload_key(table)
     rows = rows if isinstance(rows, list) else [rows]
     normalized_rows = []
@@ -1373,6 +1463,8 @@ def _replace_full_local_map_on_supabase(path: str, table: str, normalizer):
 
 def _get_hybrid_map(path: str, table: str, key_name: str, normalizer, prefer_local: bool = False, prefer_newer_by: str | None = None):
     local_map = _load_local_map(path)
+    if _should_use_local_hybrid_fast_path(path, table, key_name, bool(local_map)):
+        return local_map
     if _supabase_enabled():
         try:
             rows = _select_rows(table) or []
@@ -1408,8 +1500,11 @@ def _get_hybrid_map(path: str, table: str, key_name: str, normalizer, prefer_loc
                 else:
                     merged = dict(remote_map) if prefer_local else dict(local_map)
                     merged.update(local_map if prefer_local else remote_map)
-                _save_local_map(path, merged)
+                if merged != local_map:
+                    _save_local_map(path, merged)
+                _mark_hybrid_remote_refresh(path, table, key_name)
                 return merged
+            _mark_hybrid_remote_refresh(path, table, key_name)
             return remote_map
         except Exception:
             try:
@@ -1425,6 +1520,7 @@ def _upsert_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
     local_map = _load_local_map(path)
     local_map[str(typed_key)] = normalized
     _save_local_map(path, local_map)
+    _mark_hybrid_remote_refresh(path, table, key_name)
     if _supabase_enabled():
         try:
             _upsert_rows(table, normalized, conflict_columns=key_name)
@@ -1438,6 +1534,7 @@ def _delete_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
     local_map = _load_local_map(path)
     local_map.pop(str(typed_key), None)
     _save_local_map(path, local_map)
+    _mark_hybrid_remote_refresh(path, table, key_name)
     if _supabase_enabled():
         try:
             _delete_rows(table, {key_name: typed_key})
@@ -1578,6 +1675,8 @@ def clear_login_temp(user_id: int, *keys):
 # =========================================================
 def get_all_users():
     users = _load_local_map(USERS_FILE)
+    if _should_use_local_hybrid_fast_path(USERS_FILE, SUPABASE_USERS_TABLE, "id", bool(users)):
+        return users
     if _supabase_enabled():
         try:
             rows = _select_rows(SUPABASE_USERS_TABLE) or []
@@ -1589,8 +1688,11 @@ def get_all_users():
             if ENABLE_LOCAL_FALLBACK:
                 merged = dict(users)
                 merged.update(remote)
-                _save_local_map(USERS_FILE, merged)
+                if merged != users:
+                    _save_local_map(USERS_FILE, merged)
+                _mark_hybrid_remote_refresh(USERS_FILE, SUPABASE_USERS_TABLE, "id")
                 return merged
+            _mark_hybrid_remote_refresh(USERS_FILE, SUPABASE_USERS_TABLE, "id")
             return remote
         except Exception:
             pass
@@ -1618,17 +1720,32 @@ def register_user(user):
     if user_id <= 0:
         return
     users = get_all_users()
-    is_new_user = str(user_id) not in users
-    users[str(user_id)] = _normalize_user_record(
-        user_id,
-        {
-            "first_name": getattr(user, "first_name", "") or "",
-            "username": getattr(user, "username", "") or "",
-            "last_seen": _utcnow_naive_iso(),
-            "is_banned": is_banned(user_id),
-        },
+    uid = str(user_id)
+    is_new_user = uid not in users
+    first_name = getattr(user, "first_name", "") or ""
+    username = getattr(user, "username", "") or ""
+    is_currently_banned = is_banned(user_id)
+    current = _normalize_user_record(user_id, users.get(uid, {}))
+    last_seen_dt = _parse_iso(current.get("last_seen", ""))
+    recently_saved = bool(last_seen_dt and (_now_utc() - last_seen_dt).total_seconds() < _REGISTER_USER_WRITE_INTERVAL_SECONDS)
+    should_skip_write = (
+        not is_new_user
+        and recently_saved
+        and str(current.get("first_name", "") or "") == first_name
+        and str(current.get("username", "") or "") == username
+        and bool(current.get("is_banned", False)) == bool(is_currently_banned)
     )
-    save_all_users(users)
+    if not should_skip_write:
+        users[uid] = _normalize_user_record(
+            user_id,
+            {
+                "first_name": first_name,
+                "username": username,
+                "last_seen": _utcnow_naive_iso(),
+                "is_banned": is_currently_banned,
+            },
+        )
+        save_all_users(users)
     if is_new_user:
         increment_stat("users_registered", 1)
     touch_last_activity()
@@ -1663,6 +1780,8 @@ def get_all_users_page(limit: int = 20, offset: int = 0):
 def get_banned_users():
     data = load_json(BANNED_FILE, [])
     local = set(int(item) for item in data if str(item).lstrip("-").isdigit())
+    if _should_use_local_hybrid_fast_path(BANNED_FILE, SUPABASE_BANNED_TABLE, "user_id", bool(local)):
+        return local
     if _supabase_enabled():
         try:
             rows = _select_rows(SUPABASE_BANNED_TABLE) or []
@@ -1674,8 +1793,11 @@ def get_banned_users():
             if ENABLE_LOCAL_FALLBACK:
                 merged = set(local)
                 merged.update(remote)
-                save_json(BANNED_FILE, sorted(merged))
+                if merged != local:
+                    save_json(BANNED_FILE, sorted(merged))
+                _mark_hybrid_remote_refresh(BANNED_FILE, SUPABASE_BANNED_TABLE, "user_id")
                 return merged
+            _mark_hybrid_remote_refresh(BANNED_FILE, SUPABASE_BANNED_TABLE, "user_id")
             return remote
         except Exception:
             pass
@@ -1974,7 +2096,12 @@ def get_user_task_limit(user_id: int) -> int:
 
 
 
-def cleanup_expired_premium_users():
+def cleanup_expired_premium_users(force: bool = False):
+    global _LAST_PREMIUM_CLEANUP_AT
+    now = time.time()
+    if not force and (now - float(_LAST_PREMIUM_CLEANUP_AT or 0.0)) < _PREMIUM_CLEANUP_INTERVAL_SECONDS:
+        return False
+    _LAST_PREMIUM_CLEANUP_AT = now
     changed = False
     all_users = get_all_premium_users()
     for uid in list(all_users.keys()):
@@ -2015,36 +2142,6 @@ def get_upload_mode_label(user_id: int) -> str:
     return "Document" if mode == "document" else "Media"
 
 
-def get_settings_marks(user_id: int):
-    settings = get_user_settings(user_id)
-    has_replace_rules = bool(
-        settings.get("replace_words_file")
-        or settings.get("replace_words_caption")
-        or settings.get("replace_words")
-    )
-    return {
-        "upload_mode": "📄" if settings.get("upload_mode") == "document" else "🎞",
-        "thumbnail": setting_mark(settings.get("thumbnail_file_id")),
-        "caption": "✅" if settings.get("caption_enabled") and settings.get("caption_text") else "❌",
-        "prefix": setting_mark(settings.get("prefix")),
-        "suffix": setting_mark(settings.get("suffix")),
-        "auto_rename": setting_mark(
-            settings.get("auto_rename")
-            or settings.get("rename_template")
-            or settings.get("filename_prefix")
-            or settings.get("filename_suffix")
-        ),
-        "metadata": "✅" if settings.get("metadata_enabled") else "❌",
-        "destination": setting_mark(settings.get("upload_destination")),
-        "topic_id": setting_mark(settings.get("topic_id")),
-        "replace_words": setting_mark(has_replace_rules),
-        "index_mode": "✅" if is_index_mode(user_id) else "❌",
-        "login": "✅" if has_user_session(user_id) else "❌",
-        "batch_mode": "✅" if settings.get("batch_mode") else "❌",
-        "premium": "💎" if is_premium_user(user_id) else "🆓",
-    }
-
-
 # =========================================================
 # INDEX STORAGE
 # =========================================================
@@ -2056,6 +2153,8 @@ def get_all_index_entries():
             continue
         index_no = max(1, _to_int(row.get("index_no", offset), offset))
         local_rows[index_no] = _normalize_index_entry_record(index_no, row)
+    if _should_use_local_hybrid_fast_path(INDEX_FILE, SUPABASE_INDEX_TABLE, "index_no", bool(local_rows)):
+        return [local_rows[key] for key in sorted(local_rows)]
 
     if _supabase_enabled():
         try:
@@ -2069,8 +2168,11 @@ def get_all_index_entries():
                 merged_rows = dict(local_rows)
                 merged_rows.update(remote_rows)
                 merged = [merged_rows[key] for key in sorted(merged_rows)]
-                _save_local_list(INDEX_FILE, merged)
+                if merged != local:
+                    _save_local_list(INDEX_FILE, merged)
+                _mark_hybrid_remote_refresh(INDEX_FILE, SUPABASE_INDEX_TABLE, "index_no")
                 return merged
+            _mark_hybrid_remote_refresh(INDEX_FILE, SUPABASE_INDEX_TABLE, "index_no")
             return [remote_rows[key] for key in sorted(remote_rows)]
         except Exception:
             pass
@@ -2569,8 +2671,17 @@ def get_user_tasks(user_id: int, limit: int = 20):
 
 
 def count_running_tasks(user_id: int) -> int:
-    running_statuses = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating"}
-    return sum(1 for task in get_user_tasks(user_id, limit=1000) if task.get("status") in running_statuses)
+    target_user_id = str(user_id)
+    running = 0
+    for task_id, task in get_all_tasks().items():
+        if not isinstance(task, dict):
+            continue
+        normalized = _normalize_task_record(task_id, task)
+        if str(normalized.get("user_id")) != target_user_id:
+            continue
+        if _is_countable_running_task(normalized):
+            running += 1
+    return running
 
 
 def cleanup_old_tasks(hours: int = 24):
@@ -2764,6 +2875,7 @@ def clear_runtime_storage_cache():
     _TASKS_CACHE_LOADED_AT = 0.0
     _TASKS_LAST_LOCAL_SAVE_AT = 0.0
     _TASKS_LAST_REMOTE_SYNC_AT = 0.0
+    clear_local_json_cache()
 
 
 def create_backup_snapshot(label: str = "manual"):
@@ -2826,109 +2938,73 @@ def initialize_storage():
     cleanup_stale_active_tasks()
     cleanup_runtime_artifacts()
     touch_last_activity()
-    cleanup_expired_premium_users()
+    cleanup_expired_premium_users(force=True)
     sync_premium_stats()
 
 
 
 def get_detailed_stats():
-    stats = get_stats()
-    users = get_all_users_sorted()
-    settings_map = get_all_settings()
-    tasks = get_all_tasks()
-    now = _now_utc()
-    active_users = 0
-    for row in users:
-        parsed = _parse_iso(row.get("last_seen", ""))
-        if parsed and (now - parsed) <= timedelta(days=7):
-            active_users += 1
-    storage_counts = {"telegram": 0, "gdrive": 0, "rclone": 0}
-    for uid in settings_map:
-        mode = str(_normalize_settings(settings_map.get(uid, {})).get("storage_mode", "telegram")).lower()
-        storage_counts[mode] = storage_counts.get(mode, 0) + 1
-    task_counts = {"total": 0, "completed": 0, "failed": 0, "running": 0, "cancelled": 0, "queued": 0, "batch": 0}
-    for task in tasks.values():
-        task_counts["total"] += 1
-        status = str(task.get("status", "") or "").strip().lower()
-        if status in _ACTIVE_TASK_STATUSES:
-            task_counts["running"] += 1
-        elif status in task_counts:
-            task_counts[status] += 1
-        if str(task.get("mode", "") or "").strip().lower() == "batch":
-            task_counts["batch"] += 1
-    return {
-        "stats": stats,
-        "total_users": len(users),
-        "recent_users": get_recent_users(10),
-        "active_users": active_users,
-        "logged_in_users": len([uid for uid in settings_map if has_user_session(int(uid))]),
-        "premium_users": sync_premium_stats(),
-        "storage_counts": storage_counts,
-        "task_counts": task_counts,
-    }
+    return _get_detailed_stats_impl(
+        get_stats_fn=get_stats,
+        get_all_users_sorted_fn=get_all_users_sorted,
+        get_all_settings_fn=get_all_settings,
+        get_all_tasks_fn=get_all_tasks,
+        now_utc_fn=_now_utc,
+        parse_iso_fn=_parse_iso,
+        normalize_settings_fn=_normalize_settings,
+        active_statuses=_ACTIVE_TASK_STATUSES,
+        get_recent_users_fn=get_recent_users,
+        has_user_session_fn=has_user_session,
+        sync_premium_stats_fn=sync_premium_stats,
+        timedelta_cls=timedelta,
+    )
 
 
 def analyze_batch_input(raw_text: str):
-    raw_text = str(raw_text or "")
-    tokens = []
-    invalid_tokens = []
-    for line in raw_text.splitlines():
-        for part in line.split():
-            token = str(part or "").strip()
-            if not token:
-                continue
-            expanded = _expand_tme_range_link(token)
-            if expanded:
-                tokens.extend(expanded)
-            elif token.startswith("http://") or token.startswith("https://"):
-                invalid_tokens.append(token)
-    links = parse_batch_links(raw_text)
-    summary = {
-        "valid_links": len(links),
-        "invalid_links": len(invalid_tokens),
-        "public_links": 0,
-        "private_links": 0,
-        "topic_links": 0,
-    }
-    for link in links:
-        value = str(link)
-        if "/c/" in value:
-            summary["private_links"] += 1
-        else:
-            summary["public_links"] += 1
-        if re.search(r"https?://(?:t|telegram)\.me/(?:c/\d+/\d+/\d+|[A-Za-z0-9_]+/\d+/\d+)", value):
-            summary["topic_links"] += 1
-    summary["invalid_tokens"] = invalid_tokens[:20]
-    return summary
+    return _analyze_batch_input_impl(
+        raw_text,
+        expand_range_fn=_expand_tme_range_link,
+        parse_links_fn=parse_batch_links,
+    )
 
 
 def get_admin_overview(limit_recent_users: int = 5):
-    return {
-        "total_users": user_count(),
-        "banned_users": banned_count(),
-        "premium_users": sync_premium_stats(),
-        "recent_users": get_recent_users(limit_recent_users),
-        "running_tasks": len([task for task in get_all_tasks().values() if _is_countable_running_task(task)]),
-        "failed_tasks": len(get_failed_tasks()),
-        "stats": get_stats(),
-    }
+    return _get_admin_overview_impl(
+        limit_recent_users,
+        user_count_fn=user_count,
+        banned_count_fn=banned_count,
+        sync_premium_stats_fn=sync_premium_stats,
+        recent_users_fn=get_recent_users,
+        all_tasks_fn=get_all_tasks,
+        is_running_task_fn=_is_countable_running_task,
+        failed_tasks_fn=get_failed_tasks,
+        stats_fn=get_stats,
+    )
 
 
 # =========================================================
 # V13/V14/V15 HELPERS (APPENDED OVERRIDES)
 # =========================================================
 def get_user_storage_mode(user_id: int) -> str:
-    return str(get_user_settings(user_id).get("storage_mode", "telegram") or "telegram").strip().lower()
+    return _get_user_storage_mode_from_settings_impl(get_user_settings(user_id))
 
 
 def get_user_telegram_upload_mode(user_id: int) -> str:
-    return str(get_user_settings(user_id).get("telegram_upload_mode", get_user_settings(user_id).get("upload_mode", "media")) or "media").strip().lower()
+    return _get_user_telegram_upload_mode_from_settings_impl(get_user_settings(user_id))
 
 
 def get_settings_marks(user_id: int):
     settings = get_user_settings(user_id)
     storage_mode = str(settings.get("storage_mode", "telegram") or "telegram").strip().lower()
     caption_state = get_caption_settings_for_mode(settings, storage_mode)
+    # Primary modular path (features/storage_marks_helpers.py)
+    return _get_settings_marks_from_settings_impl(
+        settings,
+        caption_state=caption_state,
+        has_session=has_user_session(user_id),
+        is_premium=is_premium_user(user_id),
+        setting_mark_fn=setting_mark,
+    )
     telegram_mode = str(settings.get("telegram_upload_mode", settings.get("upload_mode", "media")) or "media").strip().lower()
     has_replace_rules = bool(
         settings.get("replace_words_file")
