@@ -5,13 +5,13 @@ import os
 import re
 import time
 import uuid
-from threading import Lock
+from threading import RLock
 
 from config import DATA_DIR
 from features.plan_manager import get_plan_by_id
 
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
-_ORDER_LOCK = Lock()
+_ORDER_LOCK = RLock()
 ORDER_EXPIRY_SECONDS = 300  # 5 minutes
 
 

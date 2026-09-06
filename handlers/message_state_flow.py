@@ -5,6 +5,13 @@ from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
 from features.payment_manager import submit_order_utr, get_order
+from features.plan_manager import (
+    save_plan,
+    update_plan_price,
+    update_plan_limits,
+    save_payment_config,
+    get_payment_config,
+)
 from keyboards import admin_payment_approval_markup
 
 
@@ -171,6 +178,141 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
                     await client.send_message(LOG_CHANNEL, admin_card, reply_markup=admin_markup)
                 except Exception:
                     pass
+            return True
+
+        if state == "ADM_ADD_PLAN":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            parts = [p.strip() for p in text_raw.split("|")]
+            if len(parts) < 3:
+                await message.reply_text(
+                    "❌ Sahi format me bhejein:\n`id | Name | Price | DurationDays | BatchLimit | TaskLimit | StorageModes | Features`\n\n"
+                    "*Example:*\n`pro | Pro Elite ⚡ | 249 | 30 | 250 | 5 | telegram,gdrive,personal_bot | 250 Links, 5 Tasks, Cloud Drive`\n\n"
+                    "*(Cancel karne ke liye /cancel bhejein)*"
+                )
+                return True
+            plan_id = parts[0].lower().replace(" ", "_")
+            name = parts[1]
+            try:
+                price = int(parts[2])
+            except Exception:
+                price = 99
+            duration = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 30
+            batch = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 50
+            tasks = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else 3
+            modes = parts[6] if len(parts) > 6 and parts[6] else "telegram,personal_bot"
+            features = [f.strip() for f in parts[7].split(",") if f.strip()] if len(parts) > 7 else [
+                f"{batch} Batch Limit",
+                f"{tasks} Parallel Tasks",
+                f"{duration} Days Validity",
+            ]
+
+            save_plan({
+                "id": plan_id,
+                "name": name,
+                "price": price,
+                "duration_days": duration,
+                "batch_limit": batch,
+                "task_limit": tasks,
+                "storage_modes": modes,
+                "features": features,
+                "is_active": True,
+            })
+            clear_user_state(user_id)
+            await message.reply_text(
+                f"✅ **Plan '{name}' successfully create ho gaya!**\n\n"
+                f"🆔 ID: `{plan_id}`\n"
+                f"💰 Price: `₹{price}`\n"
+                f"⏳ Validity: `{duration} Days`\n"
+                f"📦 Batch: `{batch}` | Tasks: `{tasks}`\n\n"
+                f"Aap `/admin` ya `/buy` me check kar sakte hain."
+            )
+            return True
+
+        if state.startswith("ADM_EDIT_PLAN_PRICE:"):
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            plan_id = state.split(":", 1)[1].strip()
+            raw_val = text.replace("₹", "").replace(",", "").strip()
+            if not raw_val.isdigit() or int(raw_val) <= 0:
+                await message.reply_text("❌ Kripya sirf sahi number (price) bhejein (e.g. `149`).\nYa /cancel karein.")
+                return True
+            new_price = int(raw_val)
+            ok = update_plan_price(plan_id, new_price)
+            clear_user_state(user_id)
+            if ok:
+                await message.reply_text(f"✅ Plan `{plan_id}` ka price update ho kar **₹{new_price}** ho gaya hai!\n\n/admin me dekh sakte hain.")
+            else:
+                await message.reply_text(f"❌ Plan `{plan_id}` nahi mila.")
+            return True
+
+        if state.startswith("ADM_EDIT_PLAN_LIMITS:"):
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            plan_id = state.split(":", 1)[1].strip()
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit() or not parts[2].isdigit():
+                await message.reply_text(
+                    "❌ Sahi format me bhejein: `BatchLimit | TaskLimit | DurationDays`\n*Example:* `200 | 5 | 30`\n\nYa /cancel karein."
+                )
+                return True
+            batch = int(parts[0])
+            tasks = int(parts[1])
+            days = int(parts[2])
+            ok = update_plan_limits(plan_id, batch, tasks, days)
+            clear_user_state(user_id)
+            if ok:
+                await message.reply_text(
+                    f"✅ Plan `{plan_id}` ke limits update ho gaye!\n• Batch: `{batch}`\n• Tasks: `{tasks}`\n• Validity: `{days} Days`\n\n/admin me dekh sakte hain."
+                )
+            else:
+                await message.reply_text(f"❌ Plan `{plan_id}` nahi mila.")
+            return True
+
+        if state == "ADM_SET_PAYTM":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            parts = text.split()
+            if len(parts) < 2:
+                await message.reply_text(
+                    "❌ Format: `<MID> <KEY>` (space se alag karein)\n*Example:* `CodeDe1234567890 ABCD1234EFGH5678`\n\nYa /cancel karein."
+                )
+                return True
+            mid = parts[0].strip()
+            key = parts[1].strip()
+            save_payment_config(paytm_mid=mid, paytm_key=key)
+            clear_user_state(user_id)
+            await message.reply_text(
+                f"✅ **Paytm Merchant Credentials Saved!**\n\n"
+                f"🆔 **Merchant ID:** `{mid}`\n"
+                f"🔑 **Merchant Key:** Set (`{key[:4]}****`)\n"
+                f"⚡ **Auto-Verification Status:** 🟢 Active\n\n"
+                f"Ab koi bhi user payment karega toh Paytm gateway automatically verify kar dega!\n/admin se test kar sakte hain."
+            )
+            return True
+
+        if state == "ADM_SET_UPI":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            parts = [p.strip() for p in text.split("|")]
+            upi = parts[0]
+            if "@" not in upi:
+                await message.reply_text("❌ Sahi UPI ID bhejein (e.g. `someone@okhdfcbank` ya `merchant@paytm`).\nYa /cancel karein.")
+                return True
+            name = parts[1] if len(parts) > 1 and parts[1] else "Code Devil Premium"
+            save_payment_config(upi_id=upi, payee_name=name)
+            clear_user_state(user_id)
+            await message.reply_text(
+                f"✅ **UPI Details Saved!**\n\n"
+                f"🏦 **UPI ID:** `{upi}`\n"
+                f"👤 **Payee Name:** `{name}`\n\n"
+                f"Ab QR code is UPI ID par generate hoga."
+            )
             return True
 
         setting_key = WAITING_KEYS.get(state)

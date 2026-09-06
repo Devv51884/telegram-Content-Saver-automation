@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from runtime_context import *
 from services.storage_service import *
-from features.plan_manager import get_payment_config, save_payment_config, get_all_plans, save_plan, delete_plan
+from features.plan_manager import (
+    get_payment_config,
+    save_payment_config,
+    get_all_plans,
+    get_plan_by_id,
+    save_plan,
+    delete_plan,
+    toggle_plan_status,
+    update_plan_price,
+    update_plan_limits,
+    reset_default_plans,
+)
 from features.payment_manager import get_pending_orders
 import asyncio
 
@@ -152,6 +163,16 @@ async def handle_admin_commands(client, message, lowered: str):
     user_id = message.from_user.id
     if not is_admin(user_id):
         return False
+
+    if lowered.startswith("/admin") or lowered.startswith("/panel"):
+        from texts import admin_panel_text
+        from keyboards import admin_panel_buttons
+        await message.reply_text(
+            admin_panel_text(),
+            reply_markup=admin_panel_buttons(),
+            disable_web_page_preview=True,
+        )
+        return True
 
     if lowered.startswith("/stats"):
         await message.reply_text(admin_stats_text(get_detailed_stats()), disable_web_page_preview=True)
@@ -350,6 +371,88 @@ async def handle_admin_commands(client, message, lowered: str):
         for o in orders[:10]:
             lines.append(f"• `#{o.get('order_id')}` | User: `{o.get('user_id')}` | ₹{o.get('amount')} ({o.get('plan_name')}) | UTR: `{o.get('utr_number') or 'None'}`")
         await message.reply_text("\n".join(lines))
+        return True
+
+    if lowered.startswith("/add_plan"):
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2 or "|" not in parts[1]:
+            await message.reply_text(
+                "Use: `/add_plan id | Name | Price | DurationDays | BatchLimit | TaskLimit | StorageModes | Features`\n\n"
+                "*Example:*\n`/add_plan pro | Pro 🚀 | 249 | 30 | 250 | 5 | telegram,gdrive | 250 Links, 5 Tasks`"
+            )
+            return True
+        raw_parts = [p.strip() for p in parts[1].split("|")]
+        if len(raw_parts) < 3:
+            await message.reply_text("❌ Kam se kam id, Name, aur Price dena zaroori hai.")
+            return True
+        plan_id = raw_parts[0].lower().replace(" ", "_")
+        name = raw_parts[1]
+        try:
+            price = int(raw_parts[2])
+        except Exception:
+            price = 99
+        duration = int(raw_parts[3]) if len(raw_parts) > 3 and raw_parts[3].isdigit() else 30
+        batch = int(raw_parts[4]) if len(raw_parts) > 4 and raw_parts[4].isdigit() else 50
+        tasks = int(raw_parts[5]) if len(raw_parts) > 5 and raw_parts[5].isdigit() else 3
+        modes = raw_parts[6] if len(raw_parts) > 6 and raw_parts[6] else "telegram,personal_bot"
+        features = [f.strip() for f in raw_parts[7].split(",") if f.strip()] if len(raw_parts) > 7 else [
+            f"{batch} Batch Limit",
+            f"{tasks} Parallel Tasks",
+            f"{duration} Days Validity",
+        ]
+        save_plan({
+            "id": plan_id,
+            "name": name,
+            "price": price,
+            "duration_days": duration,
+            "batch_limit": batch,
+            "task_limit": tasks,
+            "storage_modes": modes,
+            "features": features,
+            "is_active": True,
+        })
+        await message.reply_text(f"✅ Plan '{name}' (`{plan_id}`) ₹{price} successfully save ho gaya!")
+        return True
+
+    if lowered.startswith("/toggle_plan"):
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("Use: /toggle_plan <plan_id>")
+            return True
+        plan_id = parts[1].strip().lower()
+        new_status = toggle_plan_status(plan_id)
+        if new_status is None:
+            await message.reply_text(f"❌ Plan `{plan_id}` nahi mila.")
+        else:
+            status_word = "🟢 Active" if new_status else "🔴 Disabled"
+            await message.reply_text(f"Plan `{plan_id}` ab {status_word} hai!")
+        return True
+
+    if lowered.startswith("/delete_plan"):
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("Use: /delete_plan <plan_id>")
+            return True
+        plan_id = parts[1].strip().lower()
+        ok = delete_plan(plan_id)
+        if ok:
+            await message.reply_text(f"🗑 Plan `{plan_id}` delete ho gaya.")
+        else:
+            await message.reply_text(f"❌ Plan `{plan_id}` nahi mila.")
+        return True
+
+    if lowered.startswith("/edit_plan_price"):
+        parts = (message.text or "").split()
+        if len(parts) < 3 or not parts[2].isdigit():
+            await message.reply_text("Use: /edit_plan_price <plan_id> <new_price>")
+            return True
+        plan_id = parts[1].strip().lower()
+        price = int(parts[2].strip())
+        ok = update_plan_price(plan_id, price)
+        if ok:
+            await message.reply_text(f"✅ Plan `{plan_id}` ka price update ho kar **₹{price}** ho gaya.")
+        else:
+            await message.reply_text(f"❌ Plan `{plan_id}` nahi mila.")
         return True
 
     if lowered.startswith("/premium_status"):

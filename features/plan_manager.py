@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from threading import Lock
+from threading import RLock
 
 from config import DATA_DIR, ADMIN_UPI_ID, ADMIN_UPI_NAME
 
 PLANS_FILE = os.path.join(DATA_DIR, "plans.json")
 PAYMENT_CONFIG_FILE = os.path.join(DATA_DIR, "payment_config.json")
-_PLAN_LOCK = Lock()
+_PLAN_LOCK = RLock()
 
 DEFAULT_PLANS = {
     "silver": {
@@ -152,6 +152,50 @@ def delete_plan(plan_id: str) -> bool:
             _save_json(PLANS_FILE, plans)
             return True
         return False
+
+
+def toggle_plan_status(plan_id: str) -> bool | None:
+    plan_id = str(plan_id).strip().lower()
+    with _PLAN_LOCK:
+        plans = get_all_plans()
+        if plan_id not in plans:
+            return None
+        plans[plan_id]["is_active"] = not plans[plan_id].get("is_active", True)
+        _save_json(PLANS_FILE, plans)
+        return plans[plan_id]["is_active"]
+
+
+def update_plan_price(plan_id: str, new_price: int) -> bool:
+    plan_id = str(plan_id).strip().lower()
+    with _PLAN_LOCK:
+        plans = get_all_plans()
+        if plan_id not in plans:
+            return False
+        plans[plan_id]["price"] = max(1, int(new_price))
+        _save_json(PLANS_FILE, plans)
+        return True
+
+
+def update_plan_limits(plan_id: str, batch_limit: int, task_limit: int, duration_days: int) -> bool:
+    plan_id = str(plan_id).strip().lower()
+    with _PLAN_LOCK:
+        plans = get_all_plans()
+        if plan_id not in plans:
+            return False
+        if batch_limit > 0:
+            plans[plan_id]["batch_limit"] = int(batch_limit)
+        if task_limit > 0:
+            plans[plan_id]["task_limit"] = int(task_limit)
+        if duration_days > 0:
+            plans[plan_id]["duration_days"] = int(duration_days)
+        _save_json(PLANS_FILE, plans)
+        return True
+
+
+def reset_default_plans() -> dict:
+    with _PLAN_LOCK:
+        _save_json(PLANS_FILE, DEFAULT_PLANS)
+        return dict(DEFAULT_PLANS)
 
 
 def get_payment_config() -> dict:

@@ -1,16 +1,54 @@
 from __future__ import annotations
 
+import os
 from runtime_context import *
 from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
+from features.plan_manager import (
+    get_all_plans,
+    get_plan_by_id,
+    save_plan,
+    delete_plan,
+    toggle_plan_status,
+    reset_default_plans,
+    get_payment_config,
+    save_payment_config,
+)
+from features.payment_manager import get_pending_orders, get_order
+from features.paytm_service import check_paytm_order_status
+from storage import set_user_state
 
 
 async def handle_admin_callbacks(client, callback_query, user_id: int, data: str) -> bool:
-    if data == "admin_stats":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
+    if not is_admin(user_id):
+        if any(data.startswith(prefix) for prefix in ("admin_", "show_admin_", "adm_")):
+            await callback_query.answer("👑 Sirf Admin hi access kar sakta hai.", show_alert=True)
             return True
+        return False
+
+    # 1. Admin Dashboard Home
+    if data == "show_admin_panel":
+        try:
+            await callback_query.message.edit_text(
+                admin_panel_text(),
+                reply_markup=admin_panel_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await callback_query.message.reply_text(
+                    admin_panel_text(),
+                    reply_markup=admin_panel_buttons(),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        await callback_query.answer("Admin Dashboard Refreshed")
+        return True
+
+    # 2. Live Stats
+    if data == "admin_stats":
         try:
             await callback_query.message.edit_text(
                 admin_stats_text(get_detailed_stats()),
@@ -22,10 +60,8 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         await callback_query.answer("Stats refreshed")
         return True
 
+    # 3. All Users
     if data == "show_admin_users":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
-            return True
         users = get_all_users_page(limit=50, offset=0)
         text = all_users_text(users, title="All Users")
         try:
@@ -39,10 +75,8 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         await callback_query.answer("All users shown")
         return True
 
+    # 4. Recent Users
     if data == "admin_recent_users":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
-            return True
         try:
             await callback_query.message.edit_text(
                 all_users_text(get_recent_users(20), title="Recent Users"),
@@ -54,14 +88,38 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         await callback_query.answer("Recent users shown")
         return True
 
-    if data == "show_admin_panel":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
+    # 5. Plan Management Catalog
+    if data == "admin_manage_plans":
+        plans = get_all_plans()
+        try:
+            await callback_query.message.edit_text(
+                admin_manage_plans_text(plans),
+                reply_markup=admin_plans_list_markup(plans),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await callback_query.message.reply_text(
+                    admin_manage_plans_text(plans),
+                    reply_markup=admin_plans_list_markup(plans),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        await callback_query.answer()
+        return True
+
+    # 6. Plan Details View
+    if data.startswith("adm_plan_detail:"):
+        plan_id = data.split(":", 1)[1].strip()
+        plan = get_plan_by_id(plan_id)
+        if not plan:
+            await callback_query.answer("Plan nahi mila.", show_alert=True)
             return True
         try:
             await callback_query.message.edit_text(
-                admin_panel_text(),
-                reply_markup=admin_panel_buttons(),
+                admin_plan_detail_text(plan),
+                reply_markup=admin_plan_action_markup(plan_id, plan.get("is_active", True)),
                 disable_web_page_preview=True,
             )
         except Exception:
@@ -69,10 +127,263 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         await callback_query.answer()
         return True
 
-    if data == "admin_premium_help":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
+    # 7. Toggle Plan Active/Disabled
+    if data.startswith("adm_toggle_plan:"):
+        plan_id = data.split(":", 1)[1].strip()
+        new_status = toggle_plan_status(plan_id)
+        if new_status is None:
+            await callback_query.answer("Plan nahi mila.", show_alert=True)
             return True
+        status_word = "🟢 Active" if new_status else "🔴 Disabled"
+        await callback_query.answer(f"Plan '{plan_id}' ab {status_word} hai!", show_alert=True)
+        plan = get_plan_by_id(plan_id)
+        try:
+            await callback_query.message.edit_text(
+                admin_plan_detail_text(plan),
+                reply_markup=admin_plan_action_markup(plan_id, new_status),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        return True
+
+    # 8. Delete Plan
+    if data.startswith("adm_delete_plan:"):
+        plan_id = data.split(":", 1)[1].strip()
+        ok = delete_plan(plan_id)
+        if ok:
+            await callback_query.answer(f"🗑 Plan '{plan_id}' delete kar diya gaya.", show_alert=True)
+        else:
+            await callback_query.answer("Plan delete nahi ho saka.", show_alert=True)
+        plans = get_all_plans()
+        try:
+            await callback_query.message.edit_text(
+                admin_manage_plans_text(plans),
+                reply_markup=admin_plans_list_markup(plans),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        return True
+
+    # 9. Reset Default Plans
+    if data == "adm_reset_plans":
+        plans = reset_default_plans()
+        await callback_query.answer("✅ Standard default plans restore kar diye gaye!", show_alert=True)
+        try:
+            await callback_query.message.edit_text(
+                admin_manage_plans_text(plans),
+                reply_markup=admin_plans_list_markup(plans),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        return True
+
+    # 10. Start Add Plan Interactive Flow
+    if data == "adm_add_plan_start":
+        set_user_state(user_id, "ADM_ADD_PLAN")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "➕ **Create New Plan Tier**\n\n"
+                "Neeche diye format me plan ki details chat me bhejein:\n\n"
+                "**Format:**\n"
+                "`id | Name | Price | DurationDays | BatchLimit | TaskLimit | StorageModes | Feature 1, Feature 2...`\n\n"
+                "**Example:**\n"
+                "`vip_pro | VIP Pro 🚀 | 299 | 30 | 300 | 6 | telegram,gdrive,personal_bot | 300 Links Batch, 6 Concurrent Tasks, GDrive Upload`\n\n"
+                "*(Kisi bhi waqt cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 11. Start Edit Price Interactive Flow
+    if data.startswith("adm_edit_price_start:"):
+        plan_id = data.split(":", 1)[1].strip()
+        set_user_state(user_id, f"ADM_EDIT_PLAN_PRICE:{plan_id}")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                f"✏️ **Edit Price for Plan: `{plan_id}`**\n\n"
+                f"Naya price (in ₹ Rupees) yahan chat me bhejein (sirf number):\n"
+                f"*Example:* `149`\n\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 12. Start Edit Limits Interactive Flow
+    if data.startswith("adm_edit_limits_start:"):
+        plan_id = data.split(":", 1)[1].strip()
+        set_user_state(user_id, f"ADM_EDIT_PLAN_LIMITS:{plan_id}")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                f"⚙️ **Edit Limits for Plan: `{plan_id}`**\n\n"
+                f"Format: `BatchLimit | TaskLimit | DurationDays`\n"
+                f"*Example:* `250 | 5 | 30`\n\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 13. Payment Gateway Dashboard
+    if data == "admin_payment_settings":
+        try:
+            await callback_query.message.edit_text(
+                admin_payment_gateway_text(),
+                reply_markup=admin_payment_gateway_markup(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await callback_query.message.reply_text(
+                    admin_payment_gateway_text(),
+                    reply_markup=admin_payment_gateway_markup(),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        await callback_query.answer()
+        return True
+
+    # 14. Start Setup Paytm Credentials
+    if data == "adm_set_paytm_start":
+        set_user_state(user_id, "ADM_SET_PAYTM")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "⚡ **Setup Paytm Merchant Credentials**\n\n"
+                "Apna **Merchant ID (MID)** aur **Merchant Key** space se alag karke bhejein:\n\n"
+                "**Format:**\n"
+                "`<PAYTM_MID> <PAYTM_KEY>`\n\n"
+                "**Example:**\n"
+                "`CodeDe9876543210 ABCD1234EFGH5678`\n\n"
+                "*(business.paytm.com ➔ Developer Settings ➔ API Keys se copy karein)*\n"
+                "*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 15. Start Setup UPI ID
+    if data == "adm_set_upi_start":
+        set_user_state(user_id, "ADM_SET_UPI")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "🏦 **Setup UPI ID for QR Generator**\n\n"
+                "Apna **UPI ID** aur **Payee Name** format me bhejein:\n\n"
+                "**Format:**\n"
+                "`<UPI_ID> | <PAYEE_NAME>`\n\n"
+                "**Example:**\n"
+                "`yourname@okhdfcbank | Code Devil Premium`\n\n"
+                "*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 16. Test Paytm Gateway Connection
+    if data == "adm_test_paytm":
+        cfg = get_payment_config()
+        mid = cfg.get("paytm_mid")
+        key = cfg.get("paytm_key")
+        if not mid or not key:
+            await callback_query.answer(
+                "❌ Paytm Credentials Missing!\n\nPehle 'Setup Paytm MID & Key' dabayein.",
+                show_alert=True,
+            )
+            return True
+
+        is_paid, status_text, raw_data = check_paytm_order_status("TEST_PING_ORDER_001")
+        result_info = raw_data.get("resultInfo", {}) if isinstance(raw_data, dict) else {}
+        result_msg = result_info.get("resultMsg", status_text)
+
+        await callback_query.answer(
+            f"🟢 Paytm Gateway API Connected!\nMID: {mid}\nGateway: {result_msg}",
+            show_alert=True,
+        )
+        return True
+
+    # 17. Pending Orders List
+    if data == "admin_pending_orders":
+        orders = get_pending_orders()
+        if not orders:
+            await callback_query.answer("ℹ️ Koi pending order nahi hai.", show_alert=True)
+            try:
+                await callback_query.message.edit_text(
+                    "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+                    "  ⏳  **PENDING PAYMENT ORDERS**  ⏳\n"
+                    "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+                    "Abhi koi pending ya verification-waiting order nahi hai.",
+                    reply_markup=admin_panel_buttons(),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+            return True
+
+        lines = [
+            "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+            "  ⏳  **PENDING PAYMENT ORDERS**  ⏳",
+            "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+            "",
+            f"Total Active Pending: **{len(orders)} Orders**",
+            "",
+        ]
+        for o in orders[:8]:
+            utr = o.get("utr_number") or "None"
+            lines.append(f"• `#{o.get('order_id')}` | ₹{o.get('amount')} | Plan: `{o.get('plan_name')}` | UTR: `{utr}`")
+
+        lines.append("")
+        lines.append("👉 *Neeche kisi bhi order button par tap karke verify ya approve karein:*")
+        try:
+            await callback_query.message.edit_text(
+                "\n".join(lines),
+                reply_markup=admin_pending_orders_markup(orders),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 18. View Order Details
+    if data.startswith("adm_view_order:"):
+        order_id = data.split(":", 1)[1].strip()
+        order = get_order(order_id)
+        if not order:
+            await callback_query.answer("Order nahi mila.", show_alert=True)
+            return True
+        utr_str = f"`{order.get('utr_number')}`" if order.get("utr_number") else "⚠️ *Not submitted yet*"
+        card = (
+            f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+            f"  🧾 **ORDER DETAILS #{order_id}**\n"
+            f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+            f"👤 **User ID:** `{order.get('user_id')}`\n"
+            f"💎 **Plan:** `{order.get('plan_name')}`\n"
+            f"💰 **Amount:** `₹{order.get('amount')}`\n"
+            f"🧾 **UTR:** {utr_str}\n"
+            f"🔘 **Status:** `{order.get('status')}`\n\n"
+            f"Approve karne par user ka plan turant real-time me activate ho jayega."
+        )
+        try:
+            await callback_query.message.edit_text(
+                card,
+                reply_markup=admin_order_detail_markup(order_id),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 19. Premium Help Text
+    if data == "admin_premium_help":
         try:
             await callback_query.message.edit_text(
                 admin_premium_help_text(),
@@ -84,13 +395,52 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         await callback_query.answer()
         return True
 
+    # 20. Plan Help Text
     if data == "admin_plan_help":
-        if not is_admin(user_id):
-            await callback_query.answer("Only admin", show_alert=True)
-            return True
         try:
             await callback_query.message.edit_text(
                 admin_plan_help_text(),
+                reply_markup=admin_panel_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 21. Broadcast Help Text
+    if data == "admin_broadcast_help":
+        broadcast_text = (
+            "📢 **Admin Broadcast Help**\n\n"
+            "Aap bot ke sabhi registered users ko ek saath message broadcast kar sakte hain:\n\n"
+            "**Command:**\n"
+            "`/broadcast Aapka announcement message yahan...`\n\n"
+            "Ya kisi message ko reply karke `/broadcast` bhejein."
+        )
+        try:
+            await callback_query.message.edit_text(
+                broadcast_text,
+                reply_markup=admin_panel_buttons(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 22. Task Debug Help
+    if data == "admin_task_debug_help":
+        debug_text = (
+            "🧪 **Task Debug Tools**\n\n"
+            "Admin task queue aur system processes monitor karne ke liye:\n\n"
+            "• `/stats` — Live system & user stats\n"
+            "• `/storage_status` — Storage directory usage\n"
+            "• `/supabase_status` — Cloud DB connection\n"
+            "• `/cancel_all` — Emergency stop all tasks"
+        )
+        try:
+            await callback_query.message.edit_text(
+                debug_text,
                 reply_markup=admin_panel_buttons(),
                 disable_web_page_preview=True,
             )

@@ -551,11 +551,26 @@ def _storage_mode_label(mode: str) -> str:
 
 def admin_panel_buttons():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("👥 All Users", callback_data="show_admin_users")],
-        [InlineKeyboardButton("🆕 Recent Users", callback_data="admin_recent_users"), InlineKeyboardButton("💎 Premium", callback_data="admin_premium_help")],
-        [InlineKeyboardButton("🧾 Plans", callback_data="admin_plan_help"), InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast_help")],
-        [InlineKeyboardButton("🧪 Task Debug", callback_data="admin_task_debug_help"), InlineKeyboardButton("📌 Destinations", callback_data="admin_destination_help")],
-        [InlineKeyboardButton("📦 Batch", callback_data="show_batch_info"), InlineKeyboardButton("❌ Close", callback_data="close_settings")],
+        [
+            InlineKeyboardButton("📊 Live Stats", callback_data="admin_stats"),
+            InlineKeyboardButton("👥 All Users", callback_data="show_admin_users"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Manage Plans", callback_data="admin_manage_plans"),
+            InlineKeyboardButton("💳 Payment Gateway", callback_data="admin_payment_settings"),
+        ],
+        [
+            InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_pending_orders"),
+            InlineKeyboardButton("💎 Premium Users", callback_data="admin_premium_help"),
+        ],
+        [
+            InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast_help"),
+            InlineKeyboardButton("🧪 Task Debug", callback_data="admin_task_debug_help"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
     ])
 
 
@@ -729,5 +744,93 @@ def admin_payment_approval_markup(order_id: str):
             InlineKeyboardButton("✅ Approve & Activate", callback_data=f"adm_approve_pay:{order_id}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"adm_reject_pay:{order_id}"),
         ]
+    ])
+
+
+def admin_plans_list_markup(plans: dict):
+    rows = []
+    sorted_plans = sorted(plans.items(), key=lambda x: int(x[1].get("price", 0)))
+    for p_id, p in sorted_plans:
+        status_icon = "🟢" if p.get("is_active", True) else "🔴"
+        name = p.get("name", p_id)
+        price = p.get("price", 0)
+        days = p.get("duration_days", 30)
+        btn_text = f"{status_icon} {name} (₹{price} / {days}d)"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"adm_plan_detail:{p_id}")])
+
+    rows.append([
+        InlineKeyboardButton("➕ Create New Plan", callback_data="adm_add_plan_start"),
+        InlineKeyboardButton("🔄 Reset Defaults", callback_data="adm_reset_plans"),
+    ])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="show_admin_panel"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_plan_action_markup(plan_id: str, is_active: bool):
+    toggle_text = "🔴 Disable Plan" if is_active else "🟢 Enable Plan"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(toggle_text, callback_data=f"adm_toggle_plan:{plan_id}"),
+            InlineKeyboardButton("✏️ Edit Price", callback_data=f"adm_edit_price_start:{plan_id}"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Edit Limits & Days", callback_data=f"adm_edit_limits_start:{plan_id}"),
+            InlineKeyboardButton("🗑 Delete Plan", callback_data=f"adm_delete_plan:{plan_id}"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Plans", callback_data="admin_manage_plans"),
+            InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
+        ],
+    ])
+
+
+def admin_payment_gateway_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Setup Paytm MID & Key", callback_data="adm_set_paytm_start"),
+            InlineKeyboardButton("🏦 Setup UPI ID", callback_data="adm_set_upi_start"),
+        ],
+        [
+            InlineKeyboardButton("🧪 Test Paytm Gateway API", callback_data="adm_test_paytm"),
+            InlineKeyboardButton("📋 View Pending Orders", callback_data="admin_pending_orders"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="show_admin_panel"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
+    ])
+
+
+def admin_pending_orders_markup(orders: list):
+    rows = []
+    for o in orders[:8]:
+        order_id = o.get("order_id")
+        uid = o.get("user_id")
+        amt = o.get("amount")
+        utr = o.get("utr_number")
+        utr_tag = f"UTR: {utr[-4:]}" if utr else "No UTR"
+        btn_text = f"⏳ #{order_id} | ₹{amt} | {utr_tag}"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"adm_view_order:{order_id}")])
+
+    rows.append([
+        InlineKeyboardButton("🔄 Refresh Orders", callback_data="admin_pending_orders"),
+        InlineKeyboardButton("⬅️ Admin Panel", callback_data="show_admin_panel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_order_detail_markup(order_id: str):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve & Activate", callback_data=f"adm_approve_pay:{order_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"adm_reject_pay:{order_id}"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Orders", callback_data="admin_pending_orders"),
+            InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
+        ],
     ])
 

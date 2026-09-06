@@ -246,33 +246,121 @@ def premium_info_text(user_id: int):
 
 
 def admin_panel_text():
+    try:
+        from storage import get_detailed_stats
+        stats = get_detailed_stats()
+        total_users = stats.get("total_users", 0)
+        active_users = stats.get("active_users", 0)
+        premium_users = stats.get("premium_users", 0)
+        logged_in = stats.get("logged_in_users", 0)
+        tasks = stats.get("task_counts", {})
+        running_tasks = tasks.get("running", 0)
+        completed_tasks = tasks.get("completed", 0)
+    except Exception:
+        total_users = active_users = premium_users = logged_in = running_tasks = completed_tasks = 0
+
+    try:
+        from features.plan_manager import get_all_plans, get_payment_config
+        from features.payment_manager import get_pending_orders
+        plans = get_all_plans()
+        plans_count = len([p for p in plans.values() if p.get("is_active", True)])
+        pending_orders = len(get_pending_orders())
+        cfg = get_payment_config()
+        upi_id = cfg.get("upi_id") or "Not set"
+        paytm_ready = bool(cfg.get("paytm_mid") and cfg.get("paytm_key"))
+        paytm_label = f"🟢 Connected (`{cfg.get('paytm_mid')}`)" if paytm_ready else "⚪ UPI Mode (Paytm not set)"
+    except Exception:
+        plans_count = pending_orders = 0
+        upi_id = "Not set"
+        paytm_label = "⚪ Not set"
+
     return (
-        "🛡 **Admin Panel**\n\n"
-        "Yahan se admin-related controls, premium management, plan settings aur broadcast/help actions access kiye ja sakte hain.\n\n"
-        "**Useful Commands:**\n"
-        "/stats\n"
-        "/supabase_status\n"
-        "/storage_status\n"
-        "/backup\n"
-        "/restore latest\n"
-        "/users\n"
-        "/recent_users\n"
-        "/ban user_id\n"
-        "/unban user_id\n"
-        "/broadcast your message\n"
-        "/set_batch_limit user_id 500\n"
-        "/set_task_limit user_id 10\n"
-        "/set_storage_access user_id telegram,gdrive,rclone,personal_bot\n"
-        "/set_plan user_id Gold\n"
-        "/set_plan_features user_id feature 1 | feature 2\n"
-        "/clear_plan_features user_id\n"
-        "/plan_status user_id\n"
-        "/id\n\n"
-        "**Premium command examples:**\n"
-        "/add_premium user_id 30d\n"
-        "/remove_premium user_id\n"
-        "/premium_status user_id"
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "  🛡️  **CODE DEVIL ADMIN DASHBOARD**  🛡️\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        "📊 **Users & Growth:**\n"
+        f"  • Registered Users: **{total_users}**\n"
+        f"  • Active (7 Days): **{active_users}**\n"
+        f"  • Premium Subscribers: 💎 **{premium_users}**\n"
+        f"  • User Telegram Logins: 🔐 **{logged_in}**\n\n"
+        "💳 **Payment & Gateway Status:**\n"
+        f"  • Gateway Engine: {paytm_label}\n"
+        f"  • Active UPI ID: `{upi_id}`\n"
+        f"  • Configured Plan Tiers: **{plans_count} Plans**\n"
+        f"  • Pending Orders: ⏳ **{pending_orders} Waiting**\n\n"
+        "⚡ **System Engine:**\n"
+        f"  • Running Tasks: **{running_tasks}**\n"
+        f"  • Completed Tasks: **{completed_tasks}**\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 *Neeche diye interactive buttons se plans, payments, aur users manage karein:*"
     )
+
+
+def admin_manage_plans_text(plans: dict):
+    lines = [
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  ⚙️  **PLAN TIERS MANAGEMENT**  ⚙️",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        "Neeche aapke bot ke configured plan tiers hain. Kisi bhi plan par click karke uska price, limits, ya status change karein ya naya plan add karein:",
+        "",
+    ]
+    for p_id, p in sorted(plans.items(), key=lambda x: int(x[1].get("price", 0))):
+        status = "🟢 Active" if p.get("is_active", True) else "🔴 Disabled"
+        lines.append(f"• **{p.get('name')}** (`{p_id}`): ₹{p.get('price')} ({p.get('duration_days')}d) — {status}")
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("👉 *Select a plan to edit or tap '➕ Add New Plan'*")
+    return "\n".join(lines)
+
+
+def admin_plan_detail_text(plan: dict):
+    features = plan.get("features", [])
+    features_str = "\n".join([f"  • {f}" for f in features]) if features else "  • No custom features"
+    status_str = "🟢 Active" if plan.get("is_active", True) else "🔴 Disabled"
+
+    return (
+        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"  💎 **PLAN: {plan.get('name', '').upper()}**\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        f"🆔 **Plan ID:** `{plan.get('id')}`\n"
+        f"💰 **Price:** `₹{plan.get('price')}`\n"
+        f"⏳ **Validity:** `{plan.get('duration_days')} Days`\n"
+        f"📦 **Batch Limit:** `{plan.get('batch_limit')} Links`\n"
+        f"⚡ **Parallel Tasks:** `{plan.get('task_limit')} Tasks`\n"
+        f"☁️ **Storage Modes:** `{plan.get('storage_modes')}`\n"
+        f"🔘 **Current Status:** {status_str}\n\n"
+        f"**Plan Features:**\n{features_str}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👇 *Neeche diye buttons se is plan ko edit ya toggle karein:*"
+    )
+
+
+def admin_payment_gateway_text():
+    from features.plan_manager import get_payment_config
+    cfg = get_payment_config()
+    paytm_ready = bool(cfg.get("paytm_mid") and cfg.get("paytm_key"))
+    paytm_label = f"🟢 Connected (`{cfg.get('paytm_mid')}`)" if paytm_ready else "⚪ Disconnected (Using UPI Manual mode)"
+
+    return (
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "  💳 **PAYMENT GATEWAY CONFIG**  💳\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        "⚡ **Paytm Business Auto-Verification:**\n"
+        f"  • Status: {paytm_label}\n"
+        f"  • Merchant ID (MID): `{cfg.get('paytm_mid') or 'Not Set'}`\n\n"
+        "🏦 **UPI Settings (For QR Code):**\n"
+        f"  • UPI ID: `{cfg.get('upi_id') or 'Not Set'}`\n"
+        f"  • Payee Name: `{cfg.get('payee_name') or 'Code Devil'}`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 **Paytm Credentials Kaise Milegi?**\n"
+        "1. [business.paytm.com](https://business.paytm.com/) par free me account banayein.\n"
+        "2. Left menu me **Developer Settings ➔ API Keys** par click karein.\n"
+        "3. Wahan se **Merchant ID (MID)** aur **Merchant Key** copy karein.\n"
+        "4. Neeche **'⚡ Set Paytm MID & Key'** button dabayein ya command bhejein:\n"
+        "   `/set_paytm <MID> <KEY>`"
+    )
+
 
 
 def admin_plan_help_text():
