@@ -20,6 +20,9 @@ async def check_join_again(client, callback_query):
 
 async def all_callbacks(client, callback_query):
     try:
+        data = getattr(callback_query, 'data', '')
+        user_id = getattr(getattr(callback_query, 'from_user', None), 'id', 0)
+        print(f"[callback] data='{data}' user={user_id}")
         return await handle_all_callbacks(client, callback_query)
     except Exception as exc:
         if "QUERY_ID_INVALID" in str(exc):

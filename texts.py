@@ -354,11 +354,11 @@ def admin_payment_gateway_text():
         f"  • Payee Name: `{cfg.get('payee_name') or 'Code Devil'}`\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📌 **Paytm Credentials Kaise Milegi?**\n"
-        "1. [business.paytm.com](https://business.paytm.com/) par free me account banayein.\n"
-        "2. Left menu me **Developer Settings ➔ API Keys** par click karein.\n"
+        "1. business.paytm.com par account banayein.\n"
+        "2. Left menu me **Developer Settings -> API Keys** par jayein.\n"
         "3. Wahan se **Merchant ID (MID)** aur **Merchant Key** copy karein.\n"
-        "4. Neeche **'⚡ Set Paytm MID & Key'** button dabayein ya command bhejein:\n"
-        "   `/set_paytm <MID> <KEY>`"
+        "4. Neeche **'⚡ Setup Paytm MID & Key'** button dabayein ya command bhejein:\n"
+        "   `/set_paytm YOUR_MID YOUR_KEY`"
     )
 
 

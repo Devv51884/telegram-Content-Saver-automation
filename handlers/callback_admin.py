@@ -233,21 +233,31 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
     # 13. Payment Gateway Dashboard
     if data == "admin_payment_settings":
         try:
+            await callback_query.answer()
+        except Exception:
+            pass
+        try:
+            text = admin_payment_gateway_text()
+            markup = admin_payment_gateway_markup()
             await callback_query.message.edit_text(
-                admin_payment_gateway_text(),
-                reply_markup=admin_payment_gateway_markup(),
+                text,
+                reply_markup=markup,
                 disable_web_page_preview=True,
             )
-        except Exception:
+            print(f"[callback_admin] admin_payment_settings rendered successfully for user={user_id}")
+        except Exception as exc:
+            print(f"[callback_admin] edit_text failed: {exc}, trying reply_text")
             try:
                 await callback_query.message.reply_text(
-                    admin_payment_gateway_text(),
-                    reply_markup=admin_payment_gateway_markup(),
+                    text,
+                    reply_markup=markup,
                     disable_web_page_preview=True,
                 )
-            except Exception:
-                pass
-        await callback_query.answer()
+                print(f"[callback_admin] reply_text succeeded for admin_payment_settings")
+            except Exception as exc2:
+                print(f"[callback_admin] reply_text failed: {exc2}")
+                import traceback
+                traceback.print_exc()
         return True
 
     # 14. Start Setup Paytm Credentials
