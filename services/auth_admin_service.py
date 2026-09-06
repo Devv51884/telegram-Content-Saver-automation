@@ -2,15 +2,42 @@ from __future__ import annotations
 
 from runtime_context import *
 from services.storage_service import *
+from features.plan_manager import get_payment_config, save_payment_config, get_all_plans, save_plan, delete_plan
+from features.payment_manager import get_pending_orders
+import asyncio
 
 async def start_login_client(user_id: int):
+    existing = TEMP_LOGIN_CLIENTS.get(user_id)
+
+    if existing:
+        try:
+            await asyncio.sleep(0)
+            await existing.get_me()
+            return existing
+        except Exception:
+            try:
+                await existing.disconnect()
+            except Exception:
+                pass
+
     login_client = Client(
         name=f"login_{user_id}",
         api_id=API_ID,
         api_hash=API_HASH,
         in_memory=True,
+        workers=1,
     )
-    await login_client.connect()
+
+    await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(
+            login_client.connect(),
+            timeout=12
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError("Telegram connection timeout. Dobara try karo.")
+
     TEMP_LOGIN_CLIENTS[user_id] = login_client
     return login_client
 
@@ -33,7 +60,21 @@ async def cleanup_login_client(user_id: int):
 
 async def begin_login_flow(user_id: int, phone: str):
     login_client = await get_or_create_login_client(user_id)
-    sent = await login_client.send_code(phone)
+
+    try:
+        sent = await asyncio.wait_for(
+            login_client.send_code(phone),
+            timeout=15
+        )
+
+    except asyncio.TimeoutError:
+        await cleanup_login_client(user_id)
+        raise RuntimeError("OTP request timeout. Dobara try karo.")
+
+    except Exception as e:
+        await cleanup_login_client(user_id)
+        raise RuntimeError(f"OTP send failed: {e}")
+
     set_login_temp(user_id, "phone", phone)
     set_login_temp(user_id, "phone_code_hash", sent.phone_code_hash)
     set_user_state(user_id, "login_code")
@@ -60,6 +101,7 @@ async def finish_login_with_code(user_id: int, code: str):
 
     me = await login_client.get_me()
     session_string = await login_client.export_session_string()
+    await asyncio.sleep(0)
     save_user_session(user_id, session_string, tg_user_id=me.id, phone=phone)
     clear_login_temp(user_id)
     clear_user_state(user_id)
@@ -74,6 +116,7 @@ async def finish_login_with_password(user_id: int, password: str):
 
     me = await login_client.get_me()
     session_string = await login_client.export_session_string()
+    await asyncio.sleep(0)
     save_user_session(user_id, session_string, tg_user_id=me.id, phone=phone)
     clear_login_temp(user_id)
     clear_user_state(user_id)
@@ -119,7 +162,7 @@ async def handle_admin_commands(client, message, lowered: str):
         schema_state = status.get("schema_state", {}) or {}
         await message.reply_text(
             "\n".join([
-                "â˜ï¸ **Supabase Status**",
+                "🔄 **Supabase Status**",
                 "",
                 f"Enabled: **{'Yes' if status.get('enabled') else 'No'}**",
                 f"Project URL: **{'Present' if status.get('has_url') else 'Missing'}**",
@@ -191,7 +234,7 @@ async def handle_admin_commands(client, message, lowered: str):
                     result = restore_backup_snapshot(candidates[0], sync_remote=True)
                     await message.reply_text(
                         "\n".join([
-                            "â™»ï¸ **Restore Complete**",
+                            "♻️ **Restore Complete**",
                             f"Source: `{os.path.basename(candidates[0])}`",
                             f"Restored: `{', '.join(result.get('restored', []))}`",
                             f"Supabase Sync: `{', '.join((result.get('sync', {}) or {}).get('synced', [])) or 'none'}`",
@@ -211,7 +254,7 @@ async def handle_admin_commands(client, message, lowered: str):
             result = restore_backup_snapshot(cleanup_path, sync_remote=True)
             await message.reply_text(
                 "\n".join([
-                    "â™»ï¸ **Restore Complete**",
+                    "♻️ **Restore Complete**",
                     f"Restored: `{', '.join(result.get('restored', []))}`",
                     f"Supabase Sync: `{', '.join((result.get('sync', {}) or {}).get('synced', [])) or 'none'}`",
                 ]),
@@ -240,7 +283,7 @@ async def handle_admin_commands(client, message, lowered: str):
             await message.reply_text("Use: /set_batch_limit user_id 500")
             return True
         record = save_user_limit_record(int(parts[1]), {"batch_limit": int(parts[2])})
-        await message.reply_text(f"âœ… Batch limit updated\nUser: `{parts[1]}`\nBatch Limit: `{record.get('batch_limit', 0)}`")
+        await message.reply_text(f"✅ Batch limit updated\nUser: `{parts[1]}`\nBatch Limit: `{record.get('batch_limit', 0)}`")
         return True
 
     if lowered.startswith("/set_task_limit"):
@@ -249,7 +292,7 @@ async def handle_admin_commands(client, message, lowered: str):
             await message.reply_text("Use: /set_task_limit user_id 10")
             return True
         record = save_user_limit_record(int(parts[1]), {"task_limit": int(parts[2])})
-        await message.reply_text(f"âœ… Task limit updated\nUser: `{parts[1]}`\nTask Limit: `{record.get('task_limit', 0)}`")
+        await message.reply_text(f"✅ Task limit updated\nUser: `{parts[1]}`\nTask Limit: `{record.get('task_limit', 0)}`")
         return True
 
     if lowered.startswith("/set_storage_access"):
@@ -258,7 +301,55 @@ async def handle_admin_commands(client, message, lowered: str):
             await message.reply_text("Use: /set_storage_access user_id telegram,gdrive,rclone,personal_bot")
             return True
         record = save_user_limit_record(int(parts[1]), {"allowed_storage_modes": parts[2].strip()})
-        await message.reply_text(f"âœ… Storage access updated\nUser: `{parts[1]}`\nModes: `{record.get('allowed_storage_modes', '')}`")
+        await message.reply_text(f"✅ Storage access updated\nUser: `{parts[1]}`\nModes: `{record.get('allowed_storage_modes', '')}`")
+        return True
+
+    if lowered.startswith("/set_paytm"):
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3:
+            await message.reply_text("Use: /set_paytm <merchant_mid> <merchant_key>")
+            return True
+        mid = parts[1].strip()
+        key = parts[2].strip()
+        save_payment_config(paytm_mid=mid, paytm_key=key)
+        await message.reply_text(f"✅ Paytm Business credentials saved!\nMID: `{mid}`\nStatus: 🟢 Auto-Verification Active")
+        return True
+
+    if lowered.startswith("/set_upi"):
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 2:
+            await message.reply_text("Use: /set_upi <upi_id> [payee_name]")
+            return True
+        upi = parts[1].strip()
+        name = parts[2].strip() if len(parts) > 2 else "Code Devil Premium"
+        save_payment_config(upi_id=upi, payee_name=name)
+        await message.reply_text(f"✅ Payment UPI ID saved!\nUPI ID: `{upi}`\nPayee Name: `{name}`")
+        return True
+
+    if lowered.startswith("/payment_settings"):
+        cfg = get_payment_config()
+        paytm_status = "🟢 Connected (Auto-Check Active)" if cfg.get("paytm_mid") and cfg.get("paytm_key") else "⚪ Not set (Using UPI UTR mode)"
+        await message.reply_text(
+            f"⚙️ **Payment Gateway Settings**\n\n"
+            f"🏦 **UPI ID:** `{cfg.get('upi_id') or 'Not set'}`\n"
+            f"👤 **Payee Name:** `{cfg.get('payee_name') or 'Code Devil'}`\n"
+            f"⚡ **Paytm Auto-Check:** {paytm_status}\n"
+            f"🆔 **Paytm MID:** `{cfg.get('paytm_mid') or 'None'}`\n\n"
+            f"Commands:\n"
+            f"• `/set_upi someone@upi Code Devil`\n"
+            f"• `/set_paytm <MID> <KEY>`"
+        )
+        return True
+
+    if lowered.startswith("/pending_orders"):
+        orders = get_pending_orders()
+        if not orders:
+            await message.reply_text("ℹ️ Koi pending order nahi hai.")
+            return True
+        lines = ["📋 **Pending Payment Orders:**\n"]
+        for o in orders[:10]:
+            lines.append(f"• `#{o.get('order_id')}` | User: `{o.get('user_id')}` | ₹{o.get('amount')} ({o.get('plan_name')}) | UTR: `{o.get('utr_number') or 'None'}`")
+        await message.reply_text("\n".join(lines))
         return True
 
     if lowered.startswith("/premium_status"):
@@ -300,7 +391,7 @@ async def handle_admin_commands(client, message, lowered: str):
         record = set_user_plan_features(target, parts[2], updated_by=user_id)
         features = get_user_plan_features(target)
         await message.reply_text(
-            f"âœ… Plan features updated\nUser: `{target}`\nPlan: **{get_user_plan_name(target)}**\nItems: `{len(features)}`"
+            f"✅ Plan features updated\nUser: `{target}`\nPlan: **{get_user_plan_name(target)}**\nItems: `{len(features)}`"
         )
         return True
 
@@ -326,7 +417,7 @@ async def handle_admin_commands(client, message, lowered: str):
             return True
         set_user_plan_name(target, plan_name, updated_by=user_id)
         await message.reply_text(
-            f"âœ… Plan name updated\nUser: `{target}`\nPlan: **{get_user_plan_name(target)}**"
+            f"✅ Plan name updated\nUser: `{target}`\nPlan: **{get_user_plan_name(target)}**"
         )
         return True
 
@@ -339,7 +430,7 @@ async def handle_admin_commands(client, message, lowered: str):
         duration = parts[2]
         record = add_premium(target, duration, granted_by=user_id)
         await message.reply_text(
-            f"âœ… Premium added\nUser: `{target}`\nExpiry: `{record.get('premium_expires_at') or 'No expiry'}`"
+            f"✅ Premium added\nUser: `{target}`\nExpiry: `{record.get('premium_expires_at') or 'No expiry'}`"
         )
         return True
 
@@ -350,7 +441,7 @@ async def handle_admin_commands(client, message, lowered: str):
             return True
         target = int(parts[1])
         remove_premium(target)
-        await message.reply_text(f"âœ… Premium removed for `{target}`")
+        await message.reply_text(f"✅ Premium removed for `{target}`")
         return True
 
     if lowered.startswith("/ban"):
@@ -373,7 +464,7 @@ async def handle_admin_commands(client, message, lowered: str):
             return True
         target = int(parts[1].strip())
         unban_user(target)
-        await message.reply_text(f"âœ… User `{target}` ko unban kar diya gaya.")
+        await message.reply_text(f"✅ User `{target}` ko unban kar diya gaya.")
         return True
 
     if lowered.startswith("/broadcast"):
@@ -390,6 +481,7 @@ async def handle_admin_commands(client, message, lowered: str):
         reply_msg = message.reply_to_message
 
         for u in users:
+            await asyncio.sleep(0)
             uid = u.get("id")
             if not uid or is_banned(uid):
                 continue
@@ -407,7 +499,7 @@ async def handle_admin_commands(client, message, lowered: str):
             except Exception:
                 failed += 1
 
-        await status.edit_text(f"ðŸ“¢ **Broadcast Complete**\n\nâœ… Sent: {sent}\nâŒ Failed: {failed}")
+        await status.edit_text(f"ðŸ“¢ **Broadcast Complete**\n\n✅ Sent: {sent}\n❌ Failed: {failed}")
         return True
 
     if lowered.startswith("/index_id"):

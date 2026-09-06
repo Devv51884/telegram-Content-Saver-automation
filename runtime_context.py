@@ -40,6 +40,7 @@ from config import (
     AUTO_RETRY_FAILED_TASKS,
     MAX_RETRY_ATTEMPTS,
     RETRY_DELAY_SECONDS,
+    ENABLE_UPLOAD_PROGRESS,
 )
 
 from keyboards import (
@@ -275,29 +276,31 @@ app = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     in_memory=True,
+    workers=8,
 )
 
 TEMP_LOGIN_CLIENTS = {}
-FORCE_SUB_CACHE_TTL_SECONDS = 300.0
-FORCE_SUB_BLOCKED_CACHE_TTL_SECONDS = 30.0
+FORCE_SUB_CACHE_TTL_SECONDS = 600.0
+FORCE_SUB_BLOCKED_CACHE_TTL_SECONDS = 120.0
 FORCE_SUB_STATUS_CACHE: dict[int, dict[str, float | bool]] = {}
 TARGET_ACCESS_CACHE: dict[tuple[int, str, str], dict] = {}
 TARGET_PEER_READY_CACHE: dict[tuple[int, str], float] = {}
 
-GLOBAL_MAX_RUNNING_TASKS = int(getattr(cfg, "GLOBAL_MAX_RUNNING_TASKS", 20) or 20)
-QUEUE_POLL_INTERVAL = float(getattr(cfg, "QUEUE_POLL_INTERVAL", 1.0) or 1.0)
+GLOBAL_MAX_RUNNING_TASKS = int(getattr(cfg, "GLOBAL_MAX_RUNNING_TASKS", 3) or 3)
+QUEUE_POLL_INTERVAL = float(getattr(cfg, "QUEUE_POLL_INTERVAL", 2.0) or 2.0)
 ENABLE_TASK_DEBUG = bool(getattr(cfg, "ENABLE_TASK_DEBUG", False))
 TASK_CARD_HIDE_DELAY = int(getattr(cfg, "TASK_CARD_HIDE_DELAY", 8) or 8)
-PROGRESS_UPDATE_INTERVAL = float(getattr(cfg, "PROGRESS_UPDATE_INTERVAL", 2.0) or 2.0)
+PROGRESS_UPDATE_INTERVAL = float(getattr(cfg, "PROGRESS_UPDATE_INTERVAL", 5.0) or 5.0)
 PROGRESS_BAR_LENGTH = int(getattr(cfg, "PROGRESS_BAR_LENGTH", 10) or 10)
 SHOW_PROGRESS_BAR = bool(getattr(cfg, "SHOW_PROGRESS_BAR", True))
+ENABLE_UPLOAD_PROGRESS = bool(getattr(cfg, "ENABLE_UPLOAD_PROGRESS", SHOW_PROGRESS_BAR))
 SHOW_REALTIME_SPEED = bool(getattr(cfg, "SHOW_REALTIME_SPEED", True))
 SHOW_REALTIME_ETA = bool(getattr(cfg, "SHOW_REALTIME_ETA", True))
 SHOW_TRANSFERRED_SIZE = bool(getattr(cfg, "SHOW_TRANSFERRED_SIZE", True))
 TARGET_ACCESS_CACHE_TTL = float(getattr(cfg, "TARGET_ACCESS_CACHE_TTL", 45.0) or 45.0)
 TARGET_PEER_READY_TTL = float(getattr(cfg, "TARGET_PEER_READY_TTL", 90.0) or 90.0)
 
-TASK_QUEUE: asyncio.Queue = asyncio.Queue()
+TASK_QUEUE: asyncio.Queue = asyncio.Queue(maxsize=300)
 TASK_WORKERS = []
 TASK_WORKERS_STARTED = False
 TASK_WORKER_LOCK = None

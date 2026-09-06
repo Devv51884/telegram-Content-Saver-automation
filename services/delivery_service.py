@@ -3,6 +3,16 @@ from __future__ import annotations
 from runtime_context import *
 from services.storage_service import *
 from services.task_service import *
+from services.clone_delivery_service import (
+    clone_known_message_to_target,
+    clone_known_message_to_target_impl,
+)
+from services.link_service import (
+    get_temp_download_path,
+    rename_downloaded_file,
+    safe_delete_local_file,
+    try_direct_copy,
+)
 
 async def ensure_target_peer_ready(client, target):
     if not client:
@@ -141,6 +151,8 @@ async def try_direct_forward_with_user_client(user_client, source_msg, target, s
         target,
         settings,
         strict=False,
+        source_msg=source_msg,
+        index_no=index_no,
     )
     if result:
         return result
@@ -232,7 +244,7 @@ async def copy_result_to_target(client, delivered_message, target, settings: dic
     )
 
 
-async def copy_known_message_to_target(client, from_chat_id, message_id, target, settings: dict):
+async def copy_known_message_to_target(client, from_chat_id, message_id, target, settings: dict, source_msg=None, index_no: int = 0):
     return await clone_known_message_to_target(
         client,
         from_chat_id,
@@ -240,6 +252,8 @@ async def copy_known_message_to_target(client, from_chat_id, message_id, target,
         target,
         settings,
         strict=False,
+        source_msg=source_msg,
+        index_no=index_no,
     )
 
 
@@ -270,11 +284,14 @@ async def ensure_downloaded_source_file(ui_client, task_id: str, source_msg, set
     download_hint = get_temp_download_path(source_msg)
     download_path = download_hint
     try:
-        download_result = await source_client.download_media(
-            source_msg,
-            file_name=download_hint,
-            progress=progress_callback,
-            progress_args=(ui_client, task_id, "downloading"),
+        download_result = await asyncio.wait_for(
+            source_client.download_media(
+                source_msg,
+                file_name=download_hint,
+                progress=progress_callback,
+                progress_args=(ui_client, task_id, "downloading"),
+            ),
+            timeout=300,
         )
         download_path = resolve_downloaded_path(download_hint, download_result)
         ensure_valid_downloaded_file(download_path)
@@ -786,7 +803,7 @@ async def deliver_target_with_routing(ui_client, task_id: str, source_msg, setti
             "fallback_reason": "",
         })
         await update_task_status_message(ui_client, task_id)
-        ensure_task_not_cancelled(task_id)
+        from services.upload_target_service import send_text_to_target
         delivery_message = await send_text_to_target(text_client, target, source_msg, settings, index_no=index_no)
         ensure_task_not_cancelled(task_id)
         return {
@@ -833,8 +850,7 @@ async def deliver_target_with_routing(ui_client, task_id: str, source_msg, setti
         "fallback_reason": str(download_state.get("fallback_reason") or ""),
     })
     await update_task_status_message(ui_client, task_id)
-    ensure_task_not_cancelled(task_id)
-
+    from services.upload_target_service import upload_file_to_target
     delivery_message = await upload_file_to_target(upload_client, task_id, target, download_path, source_msg, settings, index_no=index_no)
     ensure_task_not_cancelled(task_id)
     return {
@@ -910,11 +926,32 @@ async def deliver_primary_then_log_routed(ui_client, task_id: str, source_msg, s
                 preferred_client_kind=primary_route.get("delivery_client_kind"),
             )
             if copy_client_kind:
-                copied = await copy_result_to_target(client_map.get(copy_client_kind), primary_result, LOG_CHANNEL, settings)
-                ensure_task_not_cancelled(task_id)
-                if copied:
-                    delivered_to.append(str(LOG_CHANNEL))
-                    route_summaries.append(describe_target_route(LOG_CHANNEL, "direct_copy", copy_client_kind))
+                try:
+                    copied = await copy_result_to_target(client_map.get(copy_client_kind), primary_result, LOG_CHANNEL, settings)
+                    ensure_task_not_cancelled(task_id)
+                    if copied:
+                        delivered_to.append(str(LOG_CHANNEL))
+                        route_summaries.append(describe_target_route(LOG_CHANNEL, "direct_copy", copy_client_kind))
+                except Exception as exc:
+                    debug_log(f"Silent copy_result_to_target failed: {exc}")
+
+        if not copied and primary_result:
+            try:
+                dest_chat_id = getattr(getattr(primary_result, "chat", None), "id", destination)
+                msg_id = getattr(primary_result, "id", None)
+                if dest_chat_id and msg_id:
+                    copied = await copy_known_message_to_target(
+                        client_map.get("main_bot") or ui_client,
+                        dest_chat_id,
+                        msg_id,
+                        LOG_CHANNEL,
+                        settings,
+                    )
+                    if copied:
+                        delivered_to.append(str(LOG_CHANNEL))
+                        route_summaries.append(describe_target_route(LOG_CHANNEL, "direct_copy", "main_bot"))
+            except Exception as exc:
+                debug_log(f"Silent direct log copy via main_bot failed: {exc}")
 
         if not copied:
             try:
@@ -935,9 +972,15 @@ async def deliver_primary_then_log_routed(ui_client, task_id: str, source_msg, s
                     delivered_to.append(str(LOG_CHANNEL))
                     route_summaries.append(describe_target_route(LOG_CHANNEL, log_route.get("delivery_path", ""), log_route.get("route_client_label") or log_route.get("delivery_client_kind")))
                 else:
-                    delivery_errors.append(f"{LOG_CHANNEL}: send returned empty response")
+                    if not primary_result:
+                        delivery_errors.append(f"{LOG_CHANNEL}: send returned empty response")
+                    else:
+                        debug_log(f"Silent log send returned empty response for {LOG_CHANNEL}")
             except Exception as exc:
-                delivery_errors.append(f"{LOG_CHANNEL}: {exc}")
+                if not primary_result:
+                    delivery_errors.append(f"{LOG_CHANNEL}: {exc}")
+                else:
+                    debug_log(f"Silent log send error for {LOG_CHANNEL}: {exc}")
 
     if not delivered_to:
         raise RuntimeError("Delivery failed: " + " | ".join(delivery_errors))

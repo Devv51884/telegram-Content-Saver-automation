@@ -23,7 +23,6 @@ def is_duplicate_private_update(message, ttl_seconds: float = UPDATE_DEDUPE_TTL_
     chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
     if not message_id or not chat_id:
         return False
-
     now = time.time()
     _cleanup_recent_updates(RECENT_PRIVATE_UPDATES, now)
     key = (chat_id, message_id)

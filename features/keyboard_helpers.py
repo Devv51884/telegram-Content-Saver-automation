@@ -15,7 +15,7 @@ def safe_url(value: str, fallback: str = "https://t.me/"):
 
 
 def upload_mode_button_label(mode: str) -> str:
-    mode = str(mode or "media").strip().lower()
+    mode = (mode or "media").strip().lower()
     if mode == "document":
         return "📄 Send As Document"
     return "🎞 Send As Media"
@@ -30,8 +30,8 @@ def yes_no_label(enabled: bool, on_text: str, off_text: str) -> str:
 
 
 def task_status_badge(status: str) -> str:
-    value = str(status or "checking").strip().lower()
-    mapping = {
+    value = (status or "checking").strip().lower()
+    mapping = TASK_STATUS_MAPPING = {
         "checking": "🔎 Checking",
         "queued": "🔎 Checking",
         "validating": "🔎 Checking",
@@ -48,5 +48,5 @@ def task_status_badge(status: str) -> str:
 
 
 def storage_mode_label(mode: str) -> str:
-    mode = str(mode or "telegram").strip().lower()
+    mode = (mode or "telegram").strip().lower()
     return {"telegram": "📨 Telegram", "gdrive": "☁️ Google Drive", "rclone": "🗂 Rclone"}.get(mode, "📨 Telegram")

@@ -64,6 +64,7 @@ def start_buttons(has_session: bool = False, is_admin: bool = False, is_premium:
         ],
         [
             InlineKeyboardButton(_premium_label(is_premium), callback_data="show_premium_info"),
+            InlineKeyboardButton("💎 Buy Premium", callback_data="buy_plans_menu"),
         ],
     ]
 
@@ -92,59 +93,76 @@ def settings_home_buttons(
     storage_mode = str(storage_mode or "telegram").strip().lower()
     current_storage_label = _storage_mode_label(storage_mode)
     current_upload_mode = str(upload_mode or "media").strip().lower()
-    toggle_upload_label = "Send As Media" if current_upload_mode == "document" else "Send As Document"
+    upload_mode_btn_text = "Mode: Document 📄" if current_upload_mode == "document" else "Mode: Media 🎞️"
+
+    # Status indicators (never show '?')
+    m_thumb = "✅" if marks.get("thumbnail") == "✅" else "❌"
+    m_cap = "✅" if marks.get("caption") == "✅" else "❌"
+    m_dest = "✅" if marks.get("destination") == "✅" else "❌"
+    m_topic = "✅" if marks.get("topic_id") == "✅" else "❌"
+    m_pref = "✅" if marks.get("prefix") == "✅" else "❌"
+    m_suff = "✅" if marks.get("suffix") == "✅" else "❌"
+    m_rename = "✅" if marks.get("auto_rename") == "✅" else "❌"
+    m_meta = "✅" if marks.get("metadata") == "✅" else "❌"
+    m_repl = "✅" if marks.get("replace_words") == "✅" else "❌"
 
     rows = [
-        [InlineKeyboardButton(f"{marks.get('storage_mode', '??')} Storage Mode | {current_storage_label}", callback_data="cycle_storage_mode")],
+        [InlineKeyboardButton(f"📦 Storage Engine: {current_storage_label} 🔄", callback_data="cycle_storage_mode")],
     ]
 
     if storage_mode == "telegram":
         rows.extend([
             [
-                InlineKeyboardButton(f"{marks.get('upload_mode', '??')} {toggle_upload_label}", callback_data="toggle_upload_mode"),
-                InlineKeyboardButton(f"{marks.get('destination', '?')} Upload Destination", callback_data="show_destination"),
+                InlineKeyboardButton(f"🔁 {upload_mode_btn_text}", callback_data="toggle_upload_mode"),
+                InlineKeyboardButton(f"📢 Target Chat: {m_dest}", callback_data="show_destination"),
             ],
             [
-                InlineKeyboardButton(f"{marks.get('thumbnail', '?')} Thumbnail", callback_data="show_thumbnail"),
-                InlineKeyboardButton(f"{marks.get('caption', '?')} Set Caption", callback_data="show_caption"),
+                InlineKeyboardButton(f"🖼️ Thumbnail: {m_thumb}", callback_data="show_thumbnail"),
+                InlineKeyboardButton(f"📝 Caption: {m_cap}", callback_data="show_caption"),
             ],
-            [InlineKeyboardButton(f"{marks.get('topic_id', '?')} Topic ID", callback_data="show_topic_id")],
+            [InlineKeyboardButton(f"📌 Topic Thread ID: {m_topic}", callback_data="show_topic_id")],
         ])
     elif storage_mode == "gdrive":
+        m_token = "✅" if marks.get("gdrive_token") == "✅" else "❌"
+        m_folder = "✅" if marks.get("gdrive_folder") == "✅" else "❌"
         rows.extend([
             [
-                InlineKeyboardButton(f"{marks.get('gdrive_token', '?')} token.pickle", callback_data="set_gdrive_token_file"),
-                InlineKeyboardButton(f"{marks.get('gdrive_folder', '?')} Folder ID", callback_data="set_gdrive_folder_id"),
+                InlineKeyboardButton(f"🔑 token.pickle: {m_token}", callback_data="set_gdrive_token_file"),
+                InlineKeyboardButton(f"📁 Folder ID: {m_folder}", callback_data="set_gdrive_folder_id"),
             ],
-            [InlineKeyboardButton(f"{marks.get('caption', '?')} Set Caption", callback_data="show_caption")],
+            [InlineKeyboardButton(f"📝 Set Caption: {m_cap}", callback_data="show_caption")],
         ])
     elif storage_mode == "rclone":
+        m_rc_cfg = "✅" if marks.get("rclone_config") == "✅" else "❌"
+        m_rc_path = "✅" if marks.get("rclone_path") == "✅" else "❌"
         rows.extend([
             [
-                InlineKeyboardButton(f"{marks.get('rclone_config', '?')} Rclone Config", callback_data="set_rclone_config_file"),
-                InlineKeyboardButton(f"{marks.get('rclone_path', '?')} Rclone Path", callback_data="set_rclone_remote_path"),
+                InlineKeyboardButton(f"📄 Rclone Config: {m_rc_cfg}", callback_data="set_rclone_config_file"),
+                InlineKeyboardButton(f"🗂️ Remote Path: {m_rc_path}", callback_data="set_rclone_remote_path"),
             ],
-            [InlineKeyboardButton(f"{marks.get('caption', '?')} Set Caption", callback_data="show_caption")],
+            [InlineKeyboardButton(f"📝 Set Caption: {m_cap}", callback_data="show_caption")],
         ])
 
     rows.extend([
         [
-            InlineKeyboardButton(f"{marks.get('prefix', '?')} Set Prefix", callback_data="show_prefix"),
-            InlineKeyboardButton(f"{marks.get('suffix', '?')} Suffix", callback_data="show_suffix"),
+            InlineKeyboardButton(f"🏷️ Prefix: {m_pref}", callback_data="show_prefix"),
+            InlineKeyboardButton(f"🏷️ Suffix: {m_suff}", callback_data="show_suffix"),
         ],
         [
-            InlineKeyboardButton(f"{marks.get('auto_rename', '?')} Set Auto Rename", callback_data="show_auto_rename"),
-            InlineKeyboardButton(f"{marks.get('metadata', '?')} Set Metadata", callback_data="show_metadata"),
+            InlineKeyboardButton(f"✍️ Auto Rename: {m_rename}", callback_data="show_auto_rename"),
+            InlineKeyboardButton(f"🏷️ Metadata: {m_meta}", callback_data="show_metadata"),
         ],
-        [InlineKeyboardButton(f"{marks.get('replace_words', '?')} Remove/Replace Words", callback_data="show_replace_words")],
-        [InlineKeyboardButton("More Settings", callback_data="show_advanced_settings")],
-        [InlineKeyboardButton("Reset All", callback_data="reset_all_settings")],
+        [InlineKeyboardButton(f"✂️ Remove / Replace Words: {m_repl}", callback_data="show_replace_words")],
+        [
+            InlineKeyboardButton("⚙️ Advanced Options", callback_data="show_advanced_settings"),
+            InlineKeyboardButton("🔄 Reset Defaults", callback_data="reset_all_settings"),
+        ],
     ])
 
     if is_admin:
-        rows.append([InlineKeyboardButton("Admin Panel", callback_data="show_admin_panel")])
+        rows.append([InlineKeyboardButton("👑 Admin Control Panel", callback_data="show_admin_panel")])
 
-    rows.append([InlineKeyboardButton("Close", callback_data="close_settings")])
+    rows.append([InlineKeyboardButton("❌ Close Menu", callback_data="close_settings")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -152,7 +170,9 @@ def settings_home_buttons(
 
 
 def premium_info_buttons(is_admin: bool = False):
-    rows = []
+    rows = [
+        [InlineKeyboardButton("💳 Buy / Upgrade Plan", callback_data="buy_plans_menu")],
+    ]
 
     if is_admin:
         rows.append([InlineKeyboardButton("💎 Premium Admin Help", callback_data="admin_premium_help")])
@@ -585,31 +605,34 @@ def advanced_settings_buttons(
     is_admin: bool = False,
     storage_mode: str = "telegram",
 ):
-    auth_text = "Logout" if has_session else "Login"
+    auth_text = "🔓 Logout Account" if has_session else "🔐 Login Account (/login)"
     auth_callback = "do_logout" if has_session else "show_login_info"
     storage_mode = str(storage_mode or "telegram").strip().lower()
     rows = [
         [
             InlineKeyboardButton(auth_text, callback_data=auth_callback),
-            InlineKeyboardButton("Login Status", callback_data="show_login_status"),
+            InlineKeyboardButton("📡 Session Status", callback_data="show_login_status"),
         ],
         [
-            InlineKeyboardButton("Personal Bot", callback_data="show_personal_bot_settings"),
-            InlineKeyboardButton("Route Template", callback_data="show_route_template"),
+            InlineKeyboardButton("🤖 Personal Bot Token", callback_data="show_personal_bot_settings"),
+            InlineKeyboardButton("🔀 Route Templates", callback_data="show_route_template"),
         ],
         [
-            InlineKeyboardButton("Auto Index", callback_data="show_index_settings"),
-            InlineKeyboardButton("Batch", callback_data="show_batch_settings"),
+            InlineKeyboardButton("🔢 Auto Indexing", callback_data="show_index_settings"),
+            InlineKeyboardButton("📦 Batch Mode", callback_data="show_batch_settings"),
         ],
-        [InlineKeyboardButton("Premium Info", callback_data="show_premium_info")],
-        [InlineKeyboardButton("Back", callback_data="show_settings_home"), InlineKeyboardButton("Close", callback_data="close_settings")],
+        [InlineKeyboardButton("💎 Premium Subscription Info", callback_data="show_premium_info")],
+        [
+            InlineKeyboardButton("⬅️ Back to Settings", callback_data="show_settings_home"),
+            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+        ],
     ]
     if storage_mode == "gdrive":
-        rows.insert(-2, [InlineKeyboardButton("Google Drive Tools", callback_data="show_gdrive_settings")])
+        rows.insert(-2, [InlineKeyboardButton("☁️ Google Drive Tools", callback_data="show_gdrive_settings")])
     elif storage_mode == "rclone":
-        rows.insert(-2, [InlineKeyboardButton("Rclone Tools", callback_data="show_rclone_settings")])
+        rows.insert(-2, [InlineKeyboardButton("🗂️ Rclone Remote Tools", callback_data="show_rclone_settings")])
     if is_admin:
-        rows.insert(-1, [InlineKeyboardButton("Admin Panel", callback_data="show_admin_panel")])
+        rows.insert(-1, [InlineKeyboardButton("👑 Admin Control Panel", callback_data="show_admin_panel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -662,3 +685,49 @@ def storage_mode_buttons(current_mode: str = "telegram", allowed_modes: list[str
         [InlineKeyboardButton("Back", callback_data="show_advanced_settings"), InlineKeyboardButton("Close", callback_data="close_settings")],
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def buy_plans_markup(active_plans: list[dict]):
+    rows = []
+    for plan in active_plans:
+        p_name = plan.get("name") or "Plan"
+        p_price = plan.get("price", 99)
+        p_days = plan.get("duration_days", 30)
+        p_id = plan.get("id")
+        btn_text = f"💎 {p_name} — ₹{p_price} ({p_days}d)"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"buy_select:{p_id}")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_premium_info"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def order_payment_markup(order_id: str, deep_links: dict | None = None):
+    deep_links = deep_links or {}
+    rows = [
+        [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"pay_check:{order_id}")],
+    ]
+    app_buttons = []
+    if deep_links.get("paytm"):
+        app_buttons.append(InlineKeyboardButton("📱 Open Paytm", url=deep_links["paytm"]))
+    if deep_links.get("phonepe"):
+        app_buttons.append(InlineKeyboardButton("📱 Open PhonePe", url=deep_links["phonepe"]))
+    if app_buttons:
+        rows.append(app_buttons)
+
+    rows.append([
+        InlineKeyboardButton("✅ Submit 12-Digit UTR", callback_data=f"pay_utr:{order_id}"),
+        InlineKeyboardButton("❌ Cancel Order", callback_data=f"pay_cancel:{order_id}"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_payment_approval_markup(order_id: str):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve & Activate", callback_data=f"adm_approve_pay:{order_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"adm_reject_pay:{order_id}"),
+        ]
+    ])
+

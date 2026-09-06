@@ -48,6 +48,7 @@ async def get_or_create_personal_bot_client(user_id: int, settings: dict):
         api_hash=API_HASH,
         bot_token=token,
         in_memory=True,
+        workers=1,
     )
     await client_obj.start()
     me = await client_obj.get_me()
@@ -85,6 +86,7 @@ async def validate_personal_bot_token(user_id: int, token: str):
         api_hash=API_HASH,
         bot_token=token,
         in_memory=True,
+        workers=1,
     )
     await temp_client.start()
     try:
@@ -133,6 +135,7 @@ async def upload_file_to_gdrive(user_id: int, settings: dict, file_path: str, so
     if not folder_id:
         raise RuntimeError("Google Drive folder ID set nahi hai.")
     description = build_storage_annotation(source_msg, settings, index_no=index_no, storage_mode="gdrive") if source_msg else ""
+    await asyncio.sleep(0)
     result = await asyncio.to_thread(_upload_file_to_gdrive_sync, token_path, file_path, folder_id, description)
     update_user_settings(user_id, {"gdrive_last_file_link": str(result.get("webViewLink", "") or result.get("id", ""))})
     return result
@@ -159,6 +162,7 @@ async def upload_file_to_rclone(user_id: int, settings: dict, file_path: str, so
     if not remote_path:
         raise RuntimeError("rclone remote path set nahi hai.")
     target = remote_path.rstrip("/") + "/" + os.path.basename(file_path)
+    await asyncio.sleep(0)
     proc = await asyncio.create_subprocess_exec(
         getattr(cfg, "RCLONE_BIN", "rclone"), "copyto", file_path, target, "--config", config_path,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -174,13 +178,27 @@ async def upload_file_to_rclone(user_id: int, settings: dict, file_path: str, so
         sidecar_target = f"{target}.caption.txt"
         try:
             Path(sidecar_path).write_text(annotation, encoding="utf-8")
+
+            await asyncio.sleep(0)
+
             sidecar_proc = await asyncio.create_subprocess_exec(
-                getattr(cfg, "RCLONE_BIN", "rclone"), "copyto", sidecar_path, sidecar_target, "--config", config_path,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                getattr(cfg, "RCLONE_BIN", "rclone"),
+                "copyto",
+                sidecar_path,
+                sidecar_target,
+                "--config",
+                config_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+
             side_stdout, side_stderr = await sidecar_proc.communicate()
+
             if sidecar_proc.returncode != 0:
-                raise RuntimeError((side_stderr or side_stdout or b"rclone caption sidecar failed").decode("utf-8", "ignore")[:500])
+                raise RuntimeError(
+                    (side_stderr or side_stdout or b"rclone caption sidecar failed")
+                    .decode("utf-8", "ignore")[:500]
+                )
         finally:
             if os.path.exists(sidecar_path):
                 try:
@@ -201,6 +219,7 @@ async def validate_rclone_settings_for_user(settings: dict):
         raise RuntimeError("rclone.conf missing")
     if not remote_path:
         raise RuntimeError("remote path missing")
+    await asyncio.sleep(0)
     proc = await asyncio.create_subprocess_exec(
         getattr(cfg, "RCLONE_BIN", "rclone"), "lsf", remote_path, "--max-depth", "1", "--config", config_path,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

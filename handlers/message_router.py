@@ -7,27 +7,28 @@ from services.task_service import *
 from services.queue_task_service import *
 from services.batch_transfer_service import *
 
+
 async def handle_private_message(client, message):
-    if should_ignore_private_update(message):
-        return
     if is_duplicate_private_update(message):
+        return
+
+    if should_ignore_private_update(message):
         return
 
     register_user(message.from_user)
     user_id = message.from_user.id
-    cleanup_expired_premium_users()
 
     blocked = await check_force_sub(client, message, user_id=user_id)
     if blocked:
         return
 
     if is_banned(user_id):
-        await message.reply_text("ðŸš« Aapko is bot se ban kiya gaya hai.")
+        await message.reply_text("🚫 Aapko is bot se ban kiya gaya hai.")
         return
 
     text_raw = message.text or message.caption or ""
     text = text_raw.strip()
-    lowered = text.lower()
+    lowered = text.lower() if text else ""
     state = get_user_state(user_id)
 
     if await handle_message_state_and_profile(client, message, user_id, text_raw, text, lowered, state):
@@ -63,7 +64,7 @@ async def handle_private_message(client, message):
     if not any(lowered.startswith(cmd) for cmd in ignored_cmds):
         batch_links = extract_batch_links_from_input(text_raw)
         if batch_links:
-            await process_batch_links(client, user_id, message, text_raw, links=batch_links)
+            asyncio.create_task(process_batch_links(client, user_id, message, text_raw, links=batch_links))
             return
 
         info = extract_telegram_link_info(text_raw)
@@ -83,3 +84,9 @@ async def handle_private_message(client, message):
 
     if await handle_message_commands(client, message, user_id, text_raw, lowered, state):
         return
+
+    if text:
+        if text.startswith("/"):
+            await message.reply_text("❌ Ye command recognized nahi hai. Commands dekhne ke liye /help ya /start use karo.")
+        else:
+            await message.reply_text("ℹ️ Please koi valid Telegram post link bhejo, ya options dekhne ke liye /start use karo.")

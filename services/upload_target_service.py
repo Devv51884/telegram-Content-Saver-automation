@@ -4,6 +4,11 @@ from runtime_context import *
 from services.storage_service import *
 from services.task_service import *
 from services.delivery_service import *
+from services.link_service import (
+    get_thumbnail_temp_path,
+    can_direct_copy,
+    try_direct_copy,
+)
 
 
 async def upload_to_storage_target(client, task_id: str, source_msg, settings: dict, user_id: int, file_path: str, storage_mode: str, index_no: int = 0, fetch_mode: str = "bot", user_client=None):
@@ -48,6 +53,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
         upload_mode = str(settings.get("upload_mode", "media") or "media").strip().lower()
 
         if source_msg.video or source_msg.document or source_msg.audio or source_msg.animation:
+            await asyncio.sleep(0)
             thumb_path = await get_thumbnail_temp_path(client, settings, task_id=task_id)
 
         if source_msg.sticker:
@@ -70,7 +76,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     video_note=file_path,
                     duration=getattr(source_msg.video_note, "duration", None),
                     length=getattr(source_msg.video_note, "length", None),
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -88,7 +94,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     caption=caption,
                     parse_mode=caption_parse_mode,
                     thumb=thumb_path if thumb_path else None,
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -105,7 +111,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     photo=file_path,
                     caption=caption,
                     parse_mode=caption_parse_mode,
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -123,7 +129,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     caption=caption,
                     parse_mode=caption_parse_mode,
                     thumb=thumb_path if thumb_path else None,
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -141,7 +147,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     caption=caption,
                     parse_mode=caption_parse_mode,
                     thumb=thumb_path if thumb_path else None,
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -158,7 +164,7 @@ async def upload_file_to_target(client, task_id: str, target, file_path: str, so
                     voice=file_path,
                     caption=caption,
                     parse_mode=caption_parse_mode,
-                    progress=progress_callback,
+                    progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                     progress_args=(client, task_id, "uploading"),
                     **extra,
                 ),
@@ -228,6 +234,7 @@ async def deliver_log_channel_with_best_effort(client, task_id: str, source_msg,
     try:
         if is_media_message(source_msg):
             if fetch_mode == "bot" and can_direct_copy(source_msg, telegram_settings, fetch_mode="bot"):
+                await asyncio.sleep(0)
                 return await try_direct_copy(client, source_msg, LOG_CHANNEL, telegram_settings, index_no=index_no)
             if fetch_mode == "user" and user_client:
                 direct = await try_direct_forward_with_user_client(user_client, source_msg, LOG_CHANNEL, telegram_settings, index_no=index_no)
@@ -235,6 +242,7 @@ async def deliver_log_channel_with_best_effort(client, task_id: str, source_msg,
                     return direct
             if delivery_profile.get("cached_send_allowed"):
                 cached_client = user_client if fetch_mode == "user" and user_client else client
+                await asyncio.sleep(0)
                 cached = await send_cached_media_to_target(cached_client, LOG_CHANNEL, source_msg, telegram_settings, index_no=index_no)
                 if cached:
                     return cached
@@ -244,15 +252,19 @@ async def deliver_log_channel_with_best_effort(client, task_id: str, source_msg,
     if not download_path:
         return await deliver_one_target(client, task_id, source_msg, telegram_settings, LOG_CHANNEL, None, index_no=index_no)
 
+    await asyncio.sleep(0)
     return await upload_file_to_target(client, task_id, LOG_CHANNEL, download_path, source_msg, telegram_settings, index_no=index_no)
 
 
 async def deliver_one_target(client, task_id: str, source_msg, settings: dict, target, download_path=None, index_no: int = 0):
     if download_path:
         return await upload_file_to_target(client, task_id, target, download_path, source_msg, settings, index_no=index_no)
+
     if is_media_message(source_msg):
         if can_direct_copy(source_msg, settings, fetch_mode="bot"):
-            return await try_direct_copy(client, source_msg, target, settings, index_no=index_no)
+            direct = await try_direct_copy(client, source_msg, target, settings, index_no=index_no)
+            if direct:
+                return direct
         delivery_profile = analyze_telegram_media_delivery(source_msg, settings)
         if delivery_profile.get("cached_send_allowed"):
             cached = await send_cached_media_to_target(client, target, source_msg, settings, index_no=index_no)
@@ -269,4 +281,5 @@ async def deliver_one_target(client, task_id: str, source_msg, settings: dict, t
             {"main_bot": client, "user_session": None, "personal_bot": None},
         )
         return await upload_file_to_target(client, task_id, target, download_path, source_msg, settings, index_no=index_no)
+
     return await send_text_to_target(client, target, source_msg, settings, index_no=index_no)

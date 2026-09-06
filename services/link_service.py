@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 from runtime_context import *
+from services.storage_service import (
+    AUTHORIZED_USER_CLIENTS,
+    is_client_connection_ready,
+    is_cached_authorized_user_client,
+    cleanup_authorized_user_client,
+)
+from services.clone_delivery_service import (
+    clone_known_message_to_target,
+)
 from services.task_service import *
 
 def extract_telegram_link_info(text: str):
@@ -10,10 +19,10 @@ def extract_telegram_link_info(text: str):
     text = str(text).strip()
     text = text.split("?", 1)[0].split("#", 1)[0].rstrip("/")
 
-    private_topic_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)/(\d+)$", text)
-    private_match = re.search(r"https?://(?:t|telegram)\.me/c/(\d+)/(\d+)$", text)
-    public_topic_match = re.search(r"https?://(?:t|telegram)\.me/([A-Za-z0-9_]+)/(\d+)/(\d+)$", text)
-    public_match = re.search(r"https?://(?:t|telegram)\.me/([A-Za-z0-9_]+)/(\d+)$", text)
+    private_topic_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/c/(\d+)/(\d+)/(\d+)$", text)
+    private_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/c/(\d+)/(\d+)$", text)
+    public_topic_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/([A-Za-z0-9_]+)/(\d+)/(\d+)$", text)
+    public_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/([A-Za-z0-9_]+)/(\d+)$", text)
 
     if private_topic_match:
         raw_chat_id = private_topic_match.group(1)
@@ -129,6 +138,7 @@ async def get_authorized_client_for_user(user_id: int):
         api_hash=API_HASH,
         session_string=session_string,
         in_memory=True,
+        workers=1,
     )
     await client.start()
     AUTHORIZED_USER_CLIENTS[user_id] = client
@@ -190,16 +200,30 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
         if not has_user_session(user_id):
             return None, info, None, "bot"
         user_client = await get_authorized_client_for_user(user_id)
+        if not user_client:
+            return None, info, None, "bot"
         try:
+            await asyncio.sleep(0)
             msg = await user_client.get_messages(info["chat_id"], info["message_id"])
             if msg and not getattr(msg, "empty", False):
                 return msg, info, user_client, "user"
-        except Exception:
-            await cleanup_authorized_user_client(user_id)
+        except Exception as exc:
+            err_str = str(exc).upper()
+            if any(k in err_str for k in ("PEER_ID_INVALID", "CHANNEL_INVALID")):
+                try:
+                    await user_client.get_chat(info["chat_id"])
+                    msg = await user_client.get_messages(info["chat_id"], info["message_id"])
+                    if msg and not getattr(msg, "empty", False):
+                        return msg, info, user_client, "user"
+                except Exception:
+                    pass
+            if any(k in err_str for k in ("AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED", "SESSION_REVOKED", "SESSION_EXPIRED")):
+                await cleanup_authorized_user_client(user_id)
             raise
         return None, info, user_client, "user"
 
     try:
+        await asyncio.sleep(0)
         msg = await bot_client.get_messages(info["chat_id"], info["message_id"])
         if msg and not getattr(msg, "empty", False):
             return msg, info, None, "bot"
@@ -208,13 +232,25 @@ async def fetch_message_via_best_client(bot_client, user_id: int, link_text: str
 
     if has_user_session(user_id):
         user_client = await get_authorized_client_for_user(user_id)
-        try:
-            msg = await user_client.get_messages(info["chat_id"], info["message_id"])
-            if msg and not getattr(msg, "empty", False):
-                return msg, info, user_client, "user"
-        except Exception:
-            await cleanup_authorized_user_client(user_id)
-            raise
+        if user_client:
+            try:
+                await asyncio.sleep(0)
+                msg = await user_client.get_messages(info["chat_id"], info["message_id"])
+                if msg and not getattr(msg, "empty", False):
+                    return msg, info, user_client, "user"
+            except Exception as exc:
+                err_str = str(exc).upper()
+                if any(k in err_str for k in ("PEER_ID_INVALID", "CHANNEL_INVALID")):
+                    try:
+                        await user_client.get_chat(info["chat_id"])
+                        msg = await user_client.get_messages(info["chat_id"], info["message_id"])
+                        if msg and not getattr(msg, "empty", False):
+                            return msg, info, user_client, "user"
+                    except Exception:
+                        pass
+                if any(k in err_str for k in ("AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED", "SESSION_REVOKED", "SESSION_EXPIRED")):
+                    await cleanup_authorized_user_client(user_id)
+                raise
 
     return None, info, None, "bot"
 
@@ -242,6 +278,8 @@ async def try_direct_copy(client, source_msg, target, settings: dict, index_no: 
         target,
         settings,
         strict=True,
+        source_msg=source_msg,
+        index_no=index_no,
     )
 
 
@@ -254,6 +292,7 @@ async def get_thumbnail_temp_path(client, settings: dict, task_id: str = ""):
     thumb_path = os.path.join(TEMP_DIR, f"thumb_{task_id or uuid.uuid4().hex[:8]}.jpg")
 
     try:
+        await asyncio.sleep(0)
         result = await client.download_media(thumb_file_id, file_name=thumb_path)
         if result and os.path.exists(result):
             return result

@@ -30,8 +30,7 @@ def source_has_protected_content(source_msg) -> bool:
     if bool(getattr(source_msg, "has_protected_content", False)):
         return True
     chat = getattr(source_msg, "chat", None)
-    chat_type = normalize_chat_type(getattr(chat, "type", ""))
-    if chat_type == "forum" and bool(getattr(chat, "has_protected_content", False)):
+    if chat and bool(getattr(chat, "has_protected_content", False)):
         return True
     return False
 

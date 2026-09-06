@@ -227,6 +227,7 @@ async def _refresh_batch_board_message(client, user_id: int, force_done: bool = 
         markup = batch_live_board_buttons(batch_key, done=False, current_task_id=str(board.get("current_task_id", "") or ""), status=str(board.get("status") or ""))
 
     try:
+        await asyncio.sleep(0)
         await client.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
@@ -312,7 +313,10 @@ async def _sync_batch_board_from_task(client, task: dict):
         board["note"] = f"Last failed: item {board['current_index']}"
 
     _save_batch_board(user_id, board)
-    await _refresh_batch_board_message(client, user_id)
+    try:
+        await _refresh_batch_board_message(client, user_id)
+    except Exception:
+        pass
 
 
 async def _close_batch_board(client, user_id: int):
@@ -409,6 +413,41 @@ def debug_log(msg: str):
         print(f"[TASK-DEBUG] {msg}")
 
 
+_PROGRESS_LAST_UPDATE_AT: dict[str, float] = {}
+
+
+async def progress_callback(current: int, total: int, client, task_id: str, stage: str = "processing"):
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return
+    now_ts = time.time()
+    last_ts = float(_PROGRESS_LAST_UPDATE_AT.get(task_id, 0.0) or 0.0)
+    min_interval = max(0.2, float(PROGRESS_UPDATE_INTERVAL or 1.0))
+    if total > 0 and current < total and (now_ts - last_ts) < min_interval:
+        return
+    _PROGRESS_LAST_UPDATE_AT[task_id] = now_ts
+
+    total_value = max(0, int(total or 0))
+    current_value = max(0, int(current or 0))
+    percent = 0.0
+    if total_value > 0:
+        percent = min(100.0, max(0.0, (current_value * 100.0) / float(total_value)))
+
+    payload = {
+        "current_stage": str(stage or "processing"),
+        "progress": percent,
+        "progress_percent": percent,
+        "current_bytes": current_value,
+        "total_bytes": total_value,
+    }
+    if SHOW_PROGRESS_BAR:
+        payload["progress_bar_text"] = progress_bar(percent, PROGRESS_BAR_LENGTH)
+    if SHOW_REALTIME_SPEED and last_ts > 0 and (now_ts - last_ts) > 0:
+        payload["speed_bps"] = max(0, int((current_value - int((get_task(task_id) or {}).get("current_bytes", 0) or 0)) / (now_ts - last_ts)))
+    touch_task(task_id, payload)
+    await update_task_status_message(client, task_id, done=False)
+
+
 async def safe_delete_message(message_obj):
     if not message_obj:
         return
@@ -437,6 +476,7 @@ async def update_checking_message(client, task_id: str, text: str | None = None)
     if not chat_id or not message_id:
         return
     try:
+        await asyncio.sleep(0)
         await client.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
@@ -458,6 +498,7 @@ async def ensure_task_card_visible(client, task_id: str):
         return False
 
     try:
+        await asyncio.sleep(0)
         await client.edit_message_text(
             chat_id=checking_chat_id,
             message_id=checking_message_id,
@@ -499,9 +540,106 @@ def should_show_processing_card(task: dict) -> bool:
     }
 
 
+async def hide_task_card_later(client, task_id: str, delay: int = TASK_CARD_HIDE_DELAY):
+    if delay <= 0:
+        return
+    await asyncio.sleep(delay)
+    task = get_task(task_id) or {}
+    if task.get("status") not in {"completed", "failed", "cancelled"}:
+        return
+    chat_id = task.get("status_chat_id")
+    message_id = task.get("status_message_id")
+    if not chat_id or not message_id:
+        return
+    try:
+        await client.delete_messages(chat_id, message_id)
+    except Exception as e:
+        debug_log(f"Failed to update task card {task_id}: {e}")
+
+
+async def update_task_status_message(client, task_id: str, done: bool = False):
+    task = get_task(task_id)
+    if not task:
+        return
+    if str(task.get("mode", "")).strip().lower() == "batch":
+        await _sync_batch_board_from_task(client, task)
+        return
+
+    if not done and not should_show_processing_card(task):
+        await update_checking_message(client, task_id)
+        return
+
+    visible = await ensure_task_card_visible(client, task_id)
+    if not visible:
+        return
+
+    task = get_task(task_id) or {}
+    chat_id = task.get("status_chat_id")
+    message_id = task.get("status_message_id")
+    if not chat_id or not message_id:
+        return
+
+    try:
+        if done and task.get("status") == "completed":
+            text = task_completed_text(task)
+        elif done and task.get("status") in {"failed", "cancelled"}:
+            text = task_failed_text(task)
+        else:
+            text = task_running_text(task)
+
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=task_buttons(task_id, done=done, status=task.get("status", "")),
+            disable_web_page_preview=True,
+        )
+
+        if done and task.get("status") in {"completed", "failed", "cancelled"}:
+            asyncio.create_task(hide_task_card_later(client, task_id))
+    except Exception as e:
+        debug_log(f"Failed to update task card {task_id}: {e}")
+
+
+async def create_task_status_message(message, task_id: str, checking_message=None):
+    task = get_task(task_id)
+    if not task:
+        return None
+
+    sent = checking_message
+    reply_markup = task_buttons(task_id, done=False, status=task.get("status", ""))
+    waiting_text = task_running_text(task)
+
+    try:
+        if sent is None:
+            sent = await message.reply_text(
+                waiting_text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        else:
+            await sent.edit_text(waiting_text, reply_markup=reply_markup, disable_web_page_preview=True)
+    except Exception:
+        try:
+            sent = await message.reply_text(waiting_text, disable_web_page_preview=True)
+        except Exception:
+            sent = None
+
+    if sent:
+        touch_task(task_id, {
+            "status_chat_id": getattr(getattr(sent, "chat", None), "id", 0),
+            "status_message_id": getattr(sent, "id", 0),
+            "checking_chat_id": 0,
+            "checking_message_id": 0,
+            "pinned_ui": True,
+            "is_visible": True,
+        })
+    return sent
+
+
 async def ask_login_for_private_link(message, info_message=None):
     text = (
-        "ðŸ” Private channel/group link detect hui hai.\n\n"
+        "ðŸ”🔒 Private channel/group link detect hui hai.\n\n"
         "Is content ko save karne ke liye pehle /login karke apna Telegram account authorize karo."
     )
     await edit_or_reply(message, text, info_message)
@@ -543,7 +681,7 @@ async def check_force_sub(client, message, *, user_id: int | None = None, force_
             return False
         if cached_blocked is True:
             await message.reply_text(
-                "âŒ Required channel join kiye bina bot use nahi kar sakte.\n\nPehle channel join karo, phir /start bhejo.",
+                "🚫 Required channel join kiye bina bot use nahi kar sakte.\n\nPehle channel join karo, phir /start bhejo.",
                 reply_markup=join_required_buttons(),
             )
             return True
@@ -555,12 +693,12 @@ async def check_force_sub(client, message, *, user_id: int | None = None, force_
     except UserNotParticipant:
         _cache_force_sub_block_state(target_user_id, True)
         await message.reply_text(
-            "âŒ Required channel join kiye bina bot use nahi kar sakte.\n\nPehle channel join karo, phir /start bhejo.",
+            "🚫 Required channel join kiye bina bot use nahi kar sakte.\n\nPehle channel join karo, phir /start bhejo.",
             reply_markup=join_required_buttons(),
         )
         return True
     except Exception as e:
         if not FORCE_SUB_STRICT:
             return False
-        await message.reply_text(f"âš ï¸ Join check me issue aa gaya:\n{e}\n\n/start dubara bhejo.")
+        await message.reply_text(f"⚠️ Join check me issue aa gaya:\n{e}\n\n/start dubara bhejo.")
         return True

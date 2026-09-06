@@ -8,7 +8,11 @@ from services.task_service import *
 
 async def handle_batch_task_callbacks(client, callback_query, user_id: int, data: str) -> bool:
     if data.startswith("batch_refresh:"):
-        await _refresh_batch_board_message(client, user_id)
+        try:
+            await asyncio.sleep(0)
+            await _refresh_batch_board_message(client, user_id)
+        except Exception:
+            pass
         await callback_query.answer("Refreshed")
         return True
 
@@ -23,7 +27,10 @@ async def handle_batch_task_callbacks(client, callback_query, user_id: int, data
         if cancelled_ids:
             for task_id in cancelled_ids:
                 await update_task_status_message(client, task_id, done=True)
-            await _refresh_batch_board_message(client, user_id)
+            try:
+                await _refresh_batch_board_message(client, user_id)
+            except Exception:
+                pass
             await callback_query.answer(f"Cancelled {len(cancelled_ids)} task")
         else:
             await callback_query.answer("No running task", show_alert=True)
@@ -35,7 +42,10 @@ async def handle_batch_task_callbacks(client, callback_query, user_id: int, data
         if cancelled_ids:
             for task_id in cancelled_ids:
                 await update_task_status_message(client, task_id, done=True)
-            await _refresh_batch_board_message(client, user_id)
+            try:
+                await _refresh_batch_board_message(client, user_id)
+            except Exception:
+                pass
             await callback_query.answer(f"Cancelled {len(cancelled_ids)} task(s)")
         else:
             await callback_query.answer("No active batch task", show_alert=True)
@@ -84,7 +94,10 @@ async def handle_batch_task_callbacks(client, callback_query, user_id: int, data
         if task and _cancel_task_record(task_id):
             await update_task_status_message(client, task_id, done=True)
             if str(task.get("mode") or "").strip().lower() == "batch" and str(task.get("batch_key") or "").strip():
-                await _refresh_batch_board_message(client, user_id)
+                try:
+                    await _refresh_batch_board_message(client, user_id)
+                except Exception:
+                    pass
         await callback_query.answer("Cancelled")
         return True
 

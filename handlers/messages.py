@@ -5,13 +5,15 @@ from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
 
+
 async def id_command_in_chat(client, message):
     topic_id = getattr(message, "message_thread_id", None)
     try:
         chat = await client.get_chat(message.chat.id)
         await message.reply_text(id_info_text(chat, topic_id), disable_web_page_preview=True)
     except Exception as e:
-        await message.reply_text(f"âŒ ID fetch failed: {e}")
+        await message.reply_text(f"ID fetch failed: {e}")
+
 
 def should_ignore_private_update(message) -> bool:
     from_user = getattr(message, "from_user", None)
@@ -42,10 +44,23 @@ def should_send_unknown_reply(message, text_raw: str) -> bool:
 
 
 async def catch_all(client, message):
-    return await handle_private_message(client, message)
+    try:
+        user_info = f"{getattr(message.from_user, 'id', 'unknown')} (@{getattr(message.from_user, 'username', '') or getattr(message.from_user, 'first_name', '')})"
+        text_preview = (message.text or message.caption or '<media>').replace('\n', ' ')[:80]
+        print(f"[msg] Incoming from {user_info}: {text_preview}")
+        return await handle_private_message(client, message)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
 
+
+_MESSAGE_HANDLERS_REGISTERED = False
 
 
 def register_message_handlers(app):
+    global _MESSAGE_HANDLERS_REGISTERED
+    if _MESSAGE_HANDLERS_REGISTERED:
+        return
     app.on_message(filters.command("id") & (filters.group | filters.channel))(id_command_in_chat)
     app.on_message(filters.private & filters.incoming)(catch_all)
+    _MESSAGE_HANDLERS_REGISTERED = True

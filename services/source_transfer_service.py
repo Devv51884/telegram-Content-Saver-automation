@@ -3,6 +3,11 @@ from __future__ import annotations
 from runtime_context import *
 from services.storage_service import *
 from services.task_service import *
+from services.task_service import (
+    update_task_status_message,
+    create_task_status_message,
+    hide_task_card_later,
+)
 from services.delivery_service import *
 from services.upload_target_service import *
 from services.link_service import *
@@ -101,13 +106,22 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
                 )
             else:
                 text_path = create_temp_text_file(source_msg, settings, index_no=user_index_no, storage_mode=storage_mode)
+                storage_info = ""
                 try:
                     touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": f"{storage_mode.title()} text route", "is_visible": True})
                     await update_task_status_message(client, task_id)
-                    delivered_to, delivery_errors, storage_info = await upload_to_storage_target(client, task_id, source_msg, telegram_settings, user_id, text_path, storage_mode, index_no=user_index_no, fetch_mode=fetch_mode, user_client=user_client)
-                    result_note = f"Index {idx_no} | Count {user_count_now} | {storage_mode.title()}"
-                    if storage_info:
-                        result_note += f" | {storage_info}"
+                    delivered_to, delivery_errors, storage_info = await upload_to_storage_target(
+                        client,
+                        task_id,
+                        source_msg,
+                        telegram_settings,
+                        user_id,
+                        text_path,
+                        storage_mode,
+                        index_no=user_index_no,
+                        fetch_mode=fetch_mode,
+                        user_client=user_client,
+                    )
                 finally:
                     if os.path.exists(text_path):
                         try:
@@ -115,6 +129,9 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
                         except Exception:
                             pass
                 ensure_task_not_cancelled(task_id)
+                result_note = f"Index {idx_no} | Count {user_count_now} | {storage_mode.title()}"
+                if storage_info:
+                    result_note += f" | {storage_info}"
                 touch_task(task_id, {
                     "status": "completed",
                     "current_stage": "completed",
@@ -130,18 +147,24 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
                     "storage_mode": storage_mode,
                 })
                 await update_task_status_message(client, task_id, done=True)
-                if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
-                    await message.reply_text(auto_index_completed_text({
-                        "batch_name": entry.get("file_name") or entry.get("content_type") or "Single Link Job",
-                        "valid_links": 1,
-                        "success": 1,
-                        "failed": 0,
-                        "destination": str(destination_label or "Not Set"),
-                        "index_no": idx_no,
-                        "user_index_no": user_index_no,
-                        "link_type": entry.get("link_type") or "unknown",
-                    }), disable_web_page_preview=True)
-                return
+
+            if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
+                await message.reply_text(
+                    auto_index_completed_text(
+                        {
+                            "batch_name": entry.get("file_name") or entry.get("content_type") or "Single Link Job",
+                            "valid_links": 1,
+                            "success": 1,
+                            "failed": 0,
+                            "destination": str(destination_label or "Not Set"),
+                            "index_no": idx_no,
+                            "user_index_no": user_index_no,
+                            "link_type": entry.get("link_type") or "unknown",
+                        }
+                    ),
+                    disable_web_page_preview=True,
+                )
+            return
         else:
             if storage_mode == "telegram":
                 delivered_to, delivery_errors, delivery_summary = await deliver_primary_then_log_routed(
@@ -158,15 +181,17 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
                 download_path = str((delivery_summary or {}).get("download_path") or "")
             else:
                 touch_task(task_id, {"status": "downloading", "current_stage": "downloading", "progress_text": f"{storage_mode.title()} fallback download path" if delivery_errors else "", "is_visible": True})
+                await asyncio.sleep(0)
                 await update_task_status_message(client, task_id)
                 download_hint = get_temp_download_path(source_msg)
                 source_client = user_client if user_client else client
                 download_path = download_hint
                 try:
+                    await asyncio.sleep(0)
                     download_result = await source_client.download_media(
                         source_msg,
                         file_name=download_hint,
-                        progress=progress_callback,
+                        progress=progress_callback if ENABLE_UPLOAD_PROGRESS else None,
                         progress_args=(client, task_id, "downloading"),
                     )
                     download_path = resolve_downloaded_path(download_hint, download_result)
@@ -180,7 +205,9 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
                     raise
                 ensure_task_not_cancelled(task_id)
                 touch_task(task_id, {"status": "uploading", "current_stage": "uploading", "progress_text": f"{storage_mode.title()} upload route", "is_visible": True})
+                await asyncio.sleep(0)
                 await update_task_status_message(client, task_id)
+                await asyncio.sleep(0)
                 delivered_to, delivery_errors, storage_info = await upload_to_storage_target(client, task_id, source_msg, telegram_settings, user_id, download_path, storage_mode, index_no=user_index_no, fetch_mode=fetch_mode, user_client=user_client)
 
         ensure_task_not_cancelled(task_id)
@@ -216,6 +243,7 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
         user_destination_text = str(destination_label or destination or settings.get("upload_destination") or "Not Set")
         is_batch_task = str((get_task(task_id) or {}).get("mode", "")).strip().lower() == "batch"
         if not is_batch_task:
+            await asyncio.sleep(0)
             await message.reply_text(
                 auto_index_completed_text({
                     "batch_name": entry.get("file_name") or entry.get("content_type") or "Single Link Job",
@@ -231,7 +259,8 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
             )
 
         if delivery_errors and not is_batch_task:
-            await message.reply_text("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Kuch targets par send fail hua:\n" + "\n".join(delivery_errors[:5]))
+            await asyncio.sleep(0)
+            await message.reply_text("⚠️ Kuch targets par send fail hua:\n" + "\n".join(delivery_errors[:5]))
 
     finally:
         if disconnect_delivery_user_client and delivery_user_client and delivery_user_client is not user_client:
@@ -251,6 +280,7 @@ async def process_source_message_transfer_impl(client, user_id: int, message, so
 
 async def _perform_transfer_impl(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
     touch_task(task_id, {"status": "fetching", "current_stage": "fetching", "progress_text": "", "is_visible": False})
+    await asyncio.sleep(0)
     await update_task_status_message(client, task_id)
 
     ensure_task_not_cancelled(task_id)
@@ -272,3 +302,24 @@ async def _perform_transfer_impl(client, user_id: int, message, link_text: str, 
         fetch_mode=fetch_mode,
         disconnect_user_client=True,
     )
+
+
+async def process_source_message_transfer(client, user_id: int, message, source_msg, task_id: str, settings: dict, destination, source_label: str, info: dict | None = None, user_client=None, fetch_mode: str = "bot", disconnect_user_client: bool = False):
+    return await process_source_message_transfer_impl(
+        client,
+        user_id,
+        message,
+        source_msg,
+        task_id,
+        settings,
+        destination,
+        source_label,
+        info=info,
+        user_client=user_client,
+        fetch_mode=fetch_mode,
+        disconnect_user_client=disconnect_user_client,
+    )
+
+
+async def _perform_transfer(client, user_id: int, message, link_text: str, task_id: str, settings: dict, destination):
+    return await _perform_transfer_impl(client, user_id, message, link_text, task_id, settings, destination)

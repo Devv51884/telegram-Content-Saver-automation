@@ -164,7 +164,7 @@ def analyze_telegram_media_delivery(source_msg, settings: dict | None) -> dict:
     )
 
     requires_local_upload = bool(needs_document_upload or filename_transform or thumbnail_transform)
-    direct_copy_blocked = bool(caption_transform or requires_local_upload)
+    direct_copy_blocked = bool(requires_local_upload)
     cached_send_allowed = bool(get_message_file_id(source_msg) and not requires_local_upload)
 
     return {

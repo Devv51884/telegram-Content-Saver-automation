@@ -5,6 +5,17 @@ from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
 
+
+from handlers.callback_payment import handle_payment_callbacks
+
+
+async def _safe_answer(callback_query, text: str = "", *, show_alert: bool = False):
+    try:
+        await callback_query.answer(text, show_alert=show_alert)
+    except Exception:
+        pass
+
+
 async def handle_all_callbacks(client, callback_query):
     if is_duplicate_callback_update(callback_query):
         return
@@ -14,17 +25,24 @@ async def handle_all_callbacks(client, callback_query):
 
     blocked = await check_force_sub(client, callback_query.message, user_id=user_id)
     if blocked:
-        await callback_query.answer("Pehle required channel join karo.", show_alert=True)
+        await _safe_answer(callback_query, "Pehle required channel join karo.", show_alert=True)
         return
 
     if is_banned(user_id):
-        await callback_query.answer("ðŸš« Aap bot use nahi kar sakte.", show_alert=True)
+        await _safe_answer(callback_query, "Aap bot use nahi kar sakte.", show_alert=True)
         return
 
-    cleanup_expired_premium_users()
+    if await handle_payment_callbacks(client, callback_query, user_id, data):
+        return
+
+    if await handle_admin_callbacks(client, callback_query, user_id, data):
+        return
+
+    if await handle_batch_task_callbacks(client, callback_query, user_id, data):
+        return
+
     s = get_user_settings(user_id)
     storage_mode = normalize_storage_mode(s.get("storage_mode", "telegram"))
-
     if storage_mode != "telegram" and is_telegram_only_settings_callback(data):
         try:
             await callback_query.message.edit_text(
@@ -34,21 +52,17 @@ async def handle_all_callbacks(client, callback_query):
             )
         except Exception:
             pass
-        await callback_query.answer(build_storage_mode_locked_callback_text(storage_mode), show_alert=True)
+        await _safe_answer(callback_query, build_storage_mode_locked_callback_text(storage_mode), show_alert=True)
         return
 
-    if await handle_admin_callbacks(client, callback_query, user_id, data):
+    if await handle_storage_callbacks(client, callback_query, user_id, data, s):
         return
 
-    if await handle_batch_task_callbacks(client, callback_query, user_id, data):
-        return
-
-    if await handle_storage_profile_callbacks(client, callback_query, user_id, data, s):
+    if await handle_profile_callbacks(client, callback_query, user_id, data, s):
         return
 
     if await handle_settings_callbacks(client, callback_query, user_id, data, s):
         return
 
-    await callback_query.answer("Unknown action")
-    return
+    await _safe_answer(callback_query, "Unknown action")
 

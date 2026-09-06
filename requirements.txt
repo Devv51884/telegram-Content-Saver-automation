@@ -1,7 +1,7 @@
 pyrofork
 python-dotenv
 flask
-TgCrypto
+tgcrypto-pyrofork
 
 # Supabase (DB)
 setuptools
@@ -12,3 +12,12 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 psycopg[binary]
+
+# Performance
+uvloop; sys_platform != 'win32'
+orjson
+
+# QR Code & Payments
+qrcode
+pillow
+

@@ -90,23 +90,23 @@ def _task_topic_display(task: dict) -> str:
 
 def start_text():
     return (
-        f"👋 Welcome to **{APP_NAME} {APP_VERSION_LABEL}**\n\n"
-        "Ye Code Devil ka upgraded structured bot hai jisme settings, tasks, premium flow aur batch processing ko aur stable banaya gaya hai.\n\n"
-        "**Available Commands:**\n"
-        "/start - Bot start karo\n"
-        "/ping - Bot status check karo\n"
-        "/help - Help guide dekho\n"
-        "/plan - Apna current plan dekho\n"
-        "/terms - Rules dekho\n"
-        "/settings - Personal settings kholo\n"
-        "/login - Telegram account login karo\n"
-        "/login_status - Login status dekho\n"
-        "/logout - Saved login remove karo\n"
-        "/my_tasks - Running/completed tasks dekho\n"
-        "/cancel - Current input ya current task cancel karo\n"
-        "/cancelall - Sab active tasks cancel karo\n\n"
-        "**Highlights:**\n"
-        "Cleaner task destination display + stronger task schema sync + better retry-friendly wording + premium-ready settings flow."
+        f"⚡ **{APP_NAME} {APP_VERSION_LABEL}**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📥 **High-Speed Restricted Content Saver**\n\n"
+        "👋 Welcome! Kisi bhi Telegram post link ko seedha chat me bhejo:\n"
+        "• Public / Private Channels (`t.me/...` & `t.me/c/...`)\n"
+        "• Groups / Supergroups & Topics\n"
+        "• Forwarding Allowed & Restricted Content\n\n"
+        "Content automatically extract hokar aapke destination par deliver ho jayega.\n\n"
+        "⚙️ **Quick Commands:**\n"
+        "• `/start` — Main menu refresh karo\n"
+        "• `/settings` — Personal settings & destination set karo\n"
+        "• `/login` — Private restricted posts ke liye account login karo\n"
+        "• `/my_tasks` — Active aur completed tasks dekho\n"
+        "• `/help` — Full guide, rename tags & caption info\n"
+        "• `/ping` — Bot response status check karo\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **Tip:** Direct post link send karo aur transfer seamlessly start ho jayega!"
     )
 
 
@@ -939,58 +939,84 @@ def _storage_mode_display(value: str) -> str:
 
 def settings_home_text(user_id: int):
     s = get_user_settings(user_id)
-    login_status = "Connected ✅" if has_user_session(user_id) else "Not Connected ❌"
-    batch_status = "Enabled ✅" if is_batch_mode(user_id) else "Disabled ❌"
+    has_session = has_user_session(user_id)
+    login_status = "🟢 Connected" if has_session else "🔴 Not Connected (/login)"
+    batch_status = "🟢 Active" if is_batch_mode(user_id) else "⚪ Off"
     storage_mode = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
+    storage_title = _storage_mode_display(storage_mode)
+    storage_icon = {"telegram": "📨", "gdrive": "☁️", "rclone": "🗂️"}.get(storage_mode, "📨")
+    plan_name = _plan_display(user_id)
+    plan_icon = "💎" if is_premium_user(user_id) else "🆓"
+
+    upload_mode_raw = str(s.get("telegram_upload_mode", s.get("upload_mode", "media")) or "media").strip().lower()
+    upload_type_str = "📄 Document (Original File)" if upload_mode_raw == "document" else "🎞️ Media (Streamable Video/Photo)"
+
+    thumb_set = bool(s.get("thumbnail_file_id"))
+    thumb_status = "🖼️ Custom Thumbnail Set" if thumb_set else "✖️ None (Original)"
+
+    caption_on = bool(s.get("caption_enabled"))
+    caption_status = "📝 Custom Caption ON" if caption_on else "✖️ Off (Original)"
+
+    prefix_val = _safe_text(s.get("prefix"), "None")
+    suffix_val = _safe_text(s.get("suffix"), "None")
+
+    rename_val = s.get("auto_rename") or s.get("rename_template") or "Off"
+    meta_on = bool(s.get("metadata_enabled"))
+    meta_status = "🏷️ Active" if meta_on else "✖️ Off"
+
+    has_replace = bool(s.get("replace_words") or s.get("replace_words_file") or s.get("replace_words_caption"))
+    replace_status = "✂️ Clean Active" if has_replace else "✖️ None"
+
+    dest_val = _safe_text(s.get("upload_destination"), "Not Set")
+    topic_val = _safe_text(s.get("topic_id"), "General (Default)")
 
     lines = [
-        "⚙️ **Settings for User**",
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  ⚙️  **BOT SETTINGS & DASHBOARD**  ⚙️",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
         "",
-        f"Plan: **{_plan_display(user_id)}**",
-        f"Storage Mode: **{_storage_mode_display(storage_mode)}**",
-        f"Authorized Login: **{login_status}**",
-        f"Batch Mode: **{batch_status}**",
-        f"Batch Limit: **{get_user_batch_limit(user_id)}**",
-        f"Task Limit: **{get_user_task_limit(user_id)}**",
+        "👤 **Account Profile**",
+        f"  • **Plan Tier:** {plan_icon} **{plan_name}**",
+        f"  • **Telegram Auth:** {login_status}",
+        f"  • **Task Concurrency:** `{get_user_task_limit(user_id)}` concurrent tasks",
+        f"  • **Batch Limit:** `{get_user_batch_limit(user_id)}` links per job ({batch_status})",
         "",
+        "🎯 **Target & Storage Destination**",
+        f"  • **Active Engine:** {storage_icon} **{storage_title}**",
     ]
 
     if storage_mode == "telegram":
         lines.extend([
-            f"Destination: **{_safe_text(s.get('upload_destination'))}**",
-            f"Topic ID: **{_safe_text(s.get('topic_id'))}**",
-            f"Telegram Upload Type: **{_upload_mode_display(s.get('telegram_upload_mode', s.get('upload_mode', 'media')))}**",
+            f"  • **Upload Format:** {upload_type_str}",
+            f"  • **Destination Chat:** `{dest_val}`",
+            f"  • **Topic Thread ID:** `{topic_val}`",
         ])
     elif storage_mode == "gdrive":
         lines.extend([
-            f"Destination: **{_safe_text(s.get('gdrive_folder_id'))}**",
-            f"Token File: **{_exists_text(s.get('gdrive_token_path'))}**",
-            f"Last GDrive Link: **{_safe_text(s.get('gdrive_last_file_link'))}**",
+            f"  • **Target Folder ID:** `{_safe_text(s.get('gdrive_folder_id'), 'Not Set')}`",
+            f"  • **Credentials Pickle:** {_exists_text(s.get('gdrive_token_path'))}",
+            f"  • **Last Uploaded Link:** `{_safe_text(s.get('gdrive_last_file_link'), 'None')}`",
         ])
     elif storage_mode == "rclone":
         lines.extend([
-            f"Destination: **{_safe_text(s.get('rclone_remote_path'))}**",
-            f"Config File: **{_exists_text(s.get('rclone_config_path'))}**",
-            f"Last Rclone Target: **{_safe_text(s.get('rclone_last_file_path'))}**",
+            f"  • **Rclone Remote:** `{_safe_text(s.get('rclone_remote_path'), 'Not Set')}`",
+            f"  • **Config File:** {_exists_text(s.get('rclone_config_path'))}",
+            f"  • **Last Remote Path:** `{_safe_text(s.get('rclone_last_file_path'), 'None')}`",
         ])
 
     lines.extend([
         "",
-        f"Custom Thumbnail: **{_exists_text(s.get('thumbnail_file_id'))}**",
-        f"Caption: **{'Enabled ✅' if s.get('caption_enabled') else 'Disabled ❌'}**",
-        f"Prefix: **{_safe_text(s.get('prefix'))}**",
-        f"Suffix: **{_safe_text(s.get('suffix'))}**",
-        f"Auto Rename: **{_safe_text(s.get('auto_rename'))}**",
-        f"Rename Template: **{_safe_text(s.get('rename_template'))}**",
-        f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**",
-        f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**",
-        f"Metadata: **{'Enabled ✅' if s.get('metadata_enabled') else 'Disabled ❌'}**",
-        f"Replace Words: **{_safe_text(s.get('replace_words'))}**",
-        f"Index Mode: **{_yes_no_enabled(is_index_mode(user_id))}**",
+        "🎨 **Media & Output Formatting**",
+        f"  • **Thumbnail:** {thumb_status}",
+        f"  • **Caption Engine:** {caption_status}",
+        f"  • **Filename Prefix:** `{prefix_val}`",
+        f"  • **Filename Suffix:** `{suffix_val}`",
+        f"  • **Auto Rename:** `{rename_val}`",
+        f"  • **Media Metadata:** {meta_status}",
+        f"  • **Word Replace Filter:** {replace_status}",
         "",
-        "Storage Mode button se Telegram -> Google Drive -> Rclone dynamically switch hota hai.",
-        "Telegram Upload Type button se Media <-> Document toggle hota hai.",
-        "Tip: /id command help guide me diya gaya hai.",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 *Neeche diye interactive buttons se configuration change karein:*",
     ])
     return "\n".join(lines)
 
@@ -1127,20 +1153,83 @@ def id_info_text(chat, topic_id: int | None = None):
 
 def advanced_settings_text(user_id: int):
     s = get_user_settings(user_id)
+    login_str = "🟢 Connected" if has_user_session(user_id) else "🔴 Disconnected (/login)"
+    bot_token = s.get("personal_bot_token")
+    bot_name = s.get("personal_bot_username")
+    personal_str = f"@{bot_name} ✅" if bot_token and bot_name else ("Set ✅" if bot_token else "✖️ None")
+    route_str = _safe_text(s.get("route_template"), "Default (Off)")
+    auto_idx = "🟢 Active" if is_index_mode(user_id) else "⚪ Off"
+    batch_mode = "🟢 Active" if is_batch_mode(user_id) else "⚪ Off"
+
     lines = [
-        "**Advanced Settings**",
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  ⚙️  **ADVANCED SETTINGS & ROUTING**  ⚙️",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
         "",
-        f"Plan: **{_plan_display(user_id)}**",
-        f"Storage Mode: **{_storage_mode_display(s.get('storage_mode', 'telegram'))}**",
-        f"Authorized Login: **{'Connected' if has_user_session(user_id) else 'Not Connected'}**",
-        f"Personal Bot: **{_exists_text(s.get('personal_bot_token'))}**",
-        f"Route Template: **{_safe_text(s.get('route_template'), 'off')}**",
-        f"Auto Index: **{_yes_no_enabled(is_index_mode(user_id))}**",
-        f"Batch Mode: **{_yes_no_enabled(is_batch_mode(user_id))}**",
-        f"Batch Limit: **{get_user_batch_limit(user_id)}**",
-        f"Task Limit: **{get_user_task_limit(user_id)}**",
+        "👤 **Account & Auth Session**",
+        f"  • **Plan Tier:** 💎 **{_plan_display(user_id)}**",
+        f"  • **Storage Engine:** **{_storage_mode_display(s.get('storage_mode', 'telegram'))}**",
+        f"  • **User Telegram Login:** {login_str}",
+        f"  • **Dedicated Personal Bot:** {personal_str}",
         "",
-        "Storage Mode switching aur common save controls home screen par available hain.",
-        "Yahan sirf advanced saver features aur helper pages dikhte hain.",
+        "⚡ **Automation & Routing**",
+        f"  • **Delivery Route Template:** `{route_str}`",
+        f"  • **Sequential Auto-Indexing:** {auto_idx}",
+        f"  • **Multi-Link Batch Mode:** {batch_mode}",
+        f"  • **User Batch Max Limit:** `{get_user_batch_limit(user_id)}` links",
+        f"  • **User Task Max Limit:** `{get_user_task_limit(user_id)}` tasks",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 *Primary settings home screen par hain. Yahan se personal bot, routing templates aur session management configure karein.*",
     ]
     return "\n".join(lines)
+
+
+def buy_plans_text():
+    return (
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "  💎 **UPGRADE TO PREMIUM PLANS** 💎\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        "Apne requirement ke mutabik best plan select karein:\n\n"
+        "🥉 **Silver Plan** (₹99 / 30 Days)\n"
+        "  • 50 Batch Links Limit\n"
+        "  • 3 Simultaneous Tasks\n"
+        "  • Fast Speed & Custom Prefix/Caption\n\n"
+        "🥈 **Gold Plan** (₹199 / 30 Days)\n"
+        "  • 200 Batch Links Limit\n"
+        "  • 5 Simultaneous Tasks\n"
+        "  • Google Drive Direct Upload\n"
+        "  • Custom Thumbnails & Auto Rename\n\n"
+        "🥇 **Diamond VIP** (₹499 / 30 Days)\n"
+        "  • 500 Mega Batch Limit\n"
+        "  • 8 Parallel Tasks | All Storage Access\n"
+        "  • VIP Priority Queue\n\n"
+        "👑 **Lifetime Elite** (₹999 / Permanent)\n"
+        "  • 1000 Mega Batch Limit | 10 Tasks\n"
+        "  • Full Cloud Access | 10 Years Validity\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 *Neeche diye kisi bhi plan par click karein:*"
+    )
+
+
+def order_payment_text(order: dict, upi_id: str):
+    import time
+    time_left = max(0, int(order.get("expires_at", 0)) - int(time.time()))
+    mins, secs = divmod(time_left, 60)
+    return (
+        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"  💳 **PAYMENT QR & INVOICE** 💳\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        f"📦 **Plan:** `{order.get('plan_name')}`\n"
+        f"💰 **Amount:** `₹{order.get('amount')}`\n"
+        f"🆔 **Order ID:** `{order.get('order_id')}`\n"
+        f"⏱️ **Validity:** `{mins:02d}:{secs:02d}` (5 Minutes)\n"
+        f"🏦 **UPI ID:** `{upi_id}`\n\n"
+        f"**Payment Instructions:**\n"
+        f"1. Upar diye gaye QR Code ko scan karein (GPay / PhonePe / Paytm).\n"
+        f"2. Exact ₹{order.get('amount')} pay karein.\n"
+        f"3. Pay karne ke baad **'🔄 Check Payment Status'** dabayein.\n"
+        f"4. Ya phir **'✅ Submit 12-Digit UTR'** dabakar apna UTR submit karein.\n\n"
+        f"⚠️ *Payment 5 minute ke andar karein.*"
+    )
+

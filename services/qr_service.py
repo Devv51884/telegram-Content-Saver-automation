@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import os
+import urllib.parse
+import qrcode
+from PIL import Image
+
+from config import TEMP_DIR
+from features.plan_manager import get_payment_config
+
+
+def build_upi_uri(upi_id: str, payee_name: str, amount: int | float, order_id: str) -> str:
+    params = {
+        "pa": str(upi_id).strip(),
+        "pn": str(payee_name).strip(),
+        "am": f"{amount:.2f}",
+        "cu": "INR",
+        "tr": str(order_id).strip(),
+        "tn": f"Plan {order_id}",
+    }
+    return f"upi://pay?{urllib.parse.urlencode(params)}"
+
+
+def generate_qr_image(upi_uri: str, order_id: str) -> str:
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    qr_path = os.path.join(TEMP_DIR, f"qr_{order_id}.png")
+
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(upi_uri)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    img.save(qr_path)
+    return qr_path
+
+
+def create_order_qr(order: dict) -> tuple[str, str, dict]:
+    cfg = get_payment_config()
+    upi_id = cfg.get("upi_id") or "someone@upi"
+    payee_name = cfg.get("payee_name") or "Code Devil Premium"
+    amount = float(order.get("amount", 99))
+    order_id = str(order.get("order_id", ""))
+
+    upi_uri = build_upi_uri(upi_id, payee_name, amount, order_id)
+    qr_file_path = generate_qr_image(upi_uri, order_id)
+
+    deep_links = {
+        "upi": upi_uri,
+        "gpay": upi_uri,
+        "phonepe": upi_uri.replace("upi://pay", "phonepe://pay"),
+        "paytm": upi_uri.replace("upi://pay", "paytmmp://pay"),
+    }
+
+    return qr_file_path, upi_uri, deep_links

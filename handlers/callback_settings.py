@@ -68,12 +68,12 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_caption_index_padding":
         set_user_state(user_id, "set_caption_index_padding")
-        await callback_query.message.reply_text("ðŸ”¢ Ab caption index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🔢 Ab caption index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_caption_index_start":
         set_user_state(user_id, "set_caption_index_start")
-        await callback_query.message.reply_text("ðŸš€ Ab caption index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🚀 Ab caption index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_caption_text":
@@ -108,7 +108,7 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_suffix":
         set_user_state(user_id, "set_suffix")
-        await callback_query.message.reply_text("ðŸ”– Ab suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🔖 Ab suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "remove_suffix":
@@ -128,12 +128,12 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_auto_rename":
         set_user_state(user_id, "set_auto_rename")
-        await callback_query.message.reply_text("âœï¸ Ab simple auto rename value bhejo.\n{index} aur {filename} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("✏️ Ab simple auto rename value bhejo.\n{index} aur {filename} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_rename_template":
         set_user_state(user_id, "set_rename_template")
-        await callback_query.message.reply_text("ðŸ§© Ab rename template bhejo.\nExample: Movie_{index}\nYa: {index}_{filename}\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🧩 Ab rename template bhejo.\nExample: Movie_{index}\nYa: {index}_{filename}\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_filename_prefix":
@@ -143,7 +143,7 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
         return True
     elif data == "set_filename_suffix":
         set_user_state(user_id, "set_filename_suffix")
-        await callback_query.message.reply_text("ðŸ”– Ab filename suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🔖 Ab filename suffix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "show_filename_index_settings":
@@ -158,12 +158,12 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_filename_index_padding":
         set_user_state(user_id, "set_filename_index_padding")
-        await callback_query.message.reply_text("ðŸ”¢ Ab filename index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🔢 Ab filename index padding bhejo.\nExample: 2\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_filename_index_start":
         set_user_state(user_id, "set_filename_index_start")
-        await callback_query.message.reply_text("ðŸš€ Ab filename index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🚀 Ab filename index start value bhejo.\nExample: 1\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "remove_auto_rename":
@@ -191,7 +191,7 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_topic_id":
         set_user_state(user_id, "set_topic_id")
-        await callback_query.message.reply_text("ðŸ§µ Ab topic id bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🧵 Ab topic id bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data in {"clear_topic_id", "remove_topic_id"}:

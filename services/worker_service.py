@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from runtime_context import *
 from services.task_service import *
+from services.task_service import (
+    update_task_status_message,
+    create_task_status_message,
+    hide_task_card_later,
+    _sync_batch_board_from_task,
+)
+from services.source_transfer_service import (
+    process_source_message_transfer,
+    _perform_transfer,
+)
+
 
 async def ensure_background_workers_started(client):
     global TASK_WORKERS_STARTED, TASK_WORKER_LOCK, STORAGE_MAINTENANCE_TASK
@@ -15,30 +26,39 @@ async def ensure_background_workers_started(client):
         if TASK_WORKERS_STARTED:
             return
 
-        worker_count = max(1, min(int(getattr(cfg, "MAX_CONCURRENT_DOWNLOADS", 2) or 2), 4))
+        worker_count = max(1, min(int(getattr(cfg, "MAX_CONCURRENT_DOWNLOADS", 1) or 1), 2))
         for idx in range(worker_count):
             worker = asyncio.create_task(task_worker(client, idx + 1))
             TASK_WORKERS.append(worker)
+
         if bool(getattr(cfg, "ENABLE_STORAGE_MAINTENANCE", True)) and STORAGE_MAINTENANCE_TASK is None:
             STORAGE_MAINTENANCE_TASK = asyncio.create_task(storage_maintenance_worker())
+
+        try:
+            from services.plan_expiry_service import start_expiry_monitor_task
+            start_expiry_monitor_task(client)
+        except Exception:
+            pass
+
         TASK_WORKERS_STARTED = True
-        print(f"ðŸ§µ Task workers started: {worker_count}")
+        print(f"Task workers started: {worker_count}")
 
 
 async def storage_maintenance_worker():
     interval = max(60.0, float(getattr(cfg, "STORAGE_MAINTENANCE_INTERVAL_SECONDS", 900) or 900))
     while True:
         try:
-            cleanup_info = cleanup_runtime_artifacts()
+            cleanup_info = await asyncio.to_thread(cleanup_runtime_artifacts)
             if any(cleanup_info.values()):
                 debug_log(f"Storage maintenance: {cleanup_info}")
+            await asyncio.to_thread(cleanup_expired_premium_users)
         except Exception as exc:
             debug_log(f"Storage maintenance failed: {exc}")
         await asyncio.sleep(interval)
 
 
 async def task_worker(client, worker_id: int):
-    print(f"ðŸ§µ Worker-{worker_id} online")
+    print(f"Worker-{worker_id} online")
     while True:
         item = await TASK_QUEUE.get()
         task_id = item["task_id"]
@@ -59,7 +79,12 @@ async def task_worker(client, worker_id: int):
             await update_task_status_message(client, task_id, done=False)
             await _run_task_attempts(client, item)
         except Exception as e:
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"Worker crash: {e}", "is_visible": True})
+            touch_task(task_id, {
+                "status": "failed",
+                "current_stage": "failed",
+                "error": f"Worker crash: {e}",
+                "is_visible": True,
+            })
             await update_task_status_message(client, task_id, done=True)
             debug_log(f"Worker-{worker_id} crashed on {task_id}: {e}")
         finally:
@@ -83,7 +108,7 @@ async def _run_task_attempts(client, item: dict):
                     "status": "processing",
                     "progress_text": f"Retry {attempt}/{MAX_RETRY_ATTEMPTS}...",
                 })
-                await update_task_status_message(client, task_id)
+            await update_task_status_message(client, task_id)
 
             source_message = item.get("source_message")
             if source_message is not None:
@@ -104,20 +129,25 @@ async def _run_task_attempts(client, item: dict):
             else:
                 await _perform_transfer(client, user_id, message, link_text, task_id, settings, destination)
             return True
-
         except FloodWait as e:
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": f"FloodWait: wait {e.value}s", "is_visible": True})
+            touch_task(task_id, {
+                "status": "failed",
+                "current_stage": "failed",
+                "error": f"FloodWait: wait {e.value}s",
+                "is_visible": True,
+            })
             await update_task_status_message(client, task_id, done=True)
-            if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
-                await message.reply_text(f"âŒ FloodWait: {e.value}s wait karo.")
             return False
-
         except Exception as e:
             error_text = str(e or "")
             lowered_error = error_text.lower()
-
             if "task cancelled by user" in lowered_error or "cancelled by user" in lowered_error:
-                touch_task(task_id, {"status": "cancelled", "current_stage": "cancelled", "error": "Cancelled by user", "is_visible": True})
+                touch_task(task_id, {
+                    "status": "cancelled",
+                    "current_stage": "cancelled",
+                    "error": "Cancelled by user",
+                    "is_visible": True,
+                })
                 await update_task_status_message(client, task_id, done=True)
                 return False
 
@@ -139,10 +169,13 @@ async def _run_task_attempts(client, item: dict):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
 
-            touch_task(task_id, {"status": "failed", "current_stage": "failed", "error": error_text, "is_visible": True})
+            touch_task(task_id, {
+                "status": "failed",
+                "current_stage": "failed",
+                "error": error_text,
+                "is_visible": True,
+            })
             await update_task_status_message(client, task_id, done=True)
-            if str((get_task(task_id) or {}).get("mode", "")).strip().lower() != "batch":
-                await message.reply_text(f"âŒ Task failed:\n{e}")
             return False
 
     return False
@@ -199,7 +232,7 @@ async def update_task_status_message(client, task_id: str, done: bool = False):
             chat_id=chat_id,
             message_id=message_id,
             text=text,
-            reply_markup=task_buttons(task_id, done=done, status=task.get('status', '')),
+            reply_markup=task_buttons(task_id, done=done, status=task.get("status", "")),
             disable_web_page_preview=True,
         )
 
@@ -216,90 +249,30 @@ async def create_task_status_message(message, task_id: str, checking_message=Non
 
     sent = checking_message
     reply_markup = task_buttons(task_id, done=False, status=task.get("status", ""))
+    waiting_text = task_running_text(task)
+
+    try:
+        if sent is None:
+            sent = await message.reply_text(
+                waiting_text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        else:
+            await sent.edit_text(waiting_text, reply_markup=reply_markup, disable_web_page_preview=True)
+    except Exception:
+        try:
+            sent = await message.reply_text(waiting_text, disable_web_page_preview=True)
+        except Exception:
+            sent = None
 
     if sent:
-        try:
-            await sent.edit_text(
-                task_running_text(task),
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            pass
-    else:
-        try:
-            sent = await message.reply_text(
-                task_running_text(task),
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            return
-
-    touch_task(task_id, {
-        "status_chat_id": sent.chat.id,
-        "status_message_id": sent.id,
-        "checking_chat_id": 0,
-        "checking_message_id": 0,
-        "pinned_ui": True,
-        "is_visible": True,
-    })
-
-
-async def throttled_progress_update(client, task_id: str):
-    task = get_task(task_id)
-    if not task:
-        return
-
-    now = time.time()
-    last = float(task.get("last_ui_update", 0) or 0)
-    if now - last < PROGRESS_UPDATE_INTERVAL:
-        return
-
-    touch_task(task_id, {"last_ui_update": now})
-    await update_task_status_message(client, task_id, done=False)
-
-
-async def progress_callback(current, total, client, task_id: str, stage: str):
-    ensure_task_not_cancelled(task_id)
-
-    task = get_task(task_id) or {}
-    now = time.time()
-    started_key = f"{stage}_started_at"
-
-    if not task.get(started_key):
-        touch_task(task_id, {started_key: now})
-        task = get_task(task_id) or {}
-
-    started_at = float(task.get(started_key, now) or now)
-    elapsed = max(now - started_at, 0.001)
-    percent = round((current / total) * 100, 2) if total else 0.0
-    speed = current / elapsed if elapsed > 0 else 0.0
-    remaining = max((total - current), 0) if total else 0
-    eta = (remaining / speed) if speed > 0 and total else 0.0
-    bar = progress_bar(percent, PROGRESS_BAR_LENGTH)
-
-    compact_parts = []
-    if SHOW_TRANSFERRED_SIZE and total:
-        compact_parts.append(f"{human_bytes(current)} / {human_bytes(total)}")
-    if SHOW_REALTIME_SPEED and speed > 0:
-        compact_parts.append(f"{human_speed(speed)}")
-    if SHOW_REALTIME_ETA and total and speed > 0:
-        compact_parts.append(f"ETA {human_eta(eta)}")
-
-    touch_task(task_id, {
-        "status": stage,
-        "current_stage": stage,
-        "current_bytes": int(current or 0),
-        "total_bytes": int(total or 0),
-        "progress": percent,
-        "progress_percent": percent,
-        "progress_bar_text": bar,
-        "speed_bps": float(speed or 0.0),
-        "eta_seconds": float(eta or 0.0),
-        "elapsed_seconds": float(elapsed or 0.0),
-        "progress_text": " â€¢ ".join(compact_parts),
-        "is_visible": True,
-    })
-    await throttled_progress_update(client, task_id)
-
+        touch_task(task_id, {
+            "status_chat_id": getattr(getattr(sent, "chat", None), "id", 0),
+            "status_message_id": getattr(sent, "id", 0),
+            "checking_chat_id": 0,
+            "checking_message_id": 0,
+            "pinned_ui": True,
+            "is_visible": True,
+        })
+    return sent

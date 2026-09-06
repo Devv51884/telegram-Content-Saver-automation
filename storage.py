@@ -4,6 +4,8 @@ import json
 import os
 import re
 import time
+import threading
+import atexit
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -230,6 +232,22 @@ def clear_local_json_cache(path: str | None = None):
     _LOCAL_JSON_CACHE.pop(_json_cache_key(path), None)
 
 
+try:
+    import orjson
+
+    def _fast_json_loads(data_bytes):
+        return orjson.loads(data_bytes)
+
+    def _fast_json_dumps(data_obj):
+        return orjson.dumps(data_obj, option=orjson.OPT_NON_STR_KEYS)
+except Exception:
+    def _fast_json_loads(data_bytes):
+        return json.loads(data_bytes)
+
+    def _fast_json_dumps(data_obj):
+        return json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def load_json(path, default):
     cache_key = _json_cache_key(path)
     cached = _LOCAL_JSON_CACHE.get(cache_key)
@@ -238,8 +256,8 @@ def load_json(path, default):
     if not os.path.exists(path):
         return deepcopy(default)
     try:
-        with open(path, "r", encoding="utf-8") as file:
-            data = json.load(file)
+        with open(path, "rb") as file:
+            data = _fast_json_loads(file.read())
             _LOCAL_JSON_CACHE[cache_key] = deepcopy(data)
             return data
     except Exception:
@@ -250,8 +268,9 @@ def save_json(path, data):
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2, ensure_ascii=False)
+    payload = _fast_json_dumps(data)
+    with open(path, "wb") as file:
+        file.write(payload)
     _LOCAL_JSON_CACHE[_json_cache_key(path)] = deepcopy(data)
 
 
@@ -325,9 +344,9 @@ def _parse_iso(value):
 _ACTIVE_TASK_STATUSES = {"queued", "fetching", "downloading", "uploading", "processing", "retrying", "copying", "validating", "checking"}
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
 _TASK_STATUS_TTL = max(5, _to_int(TASK_STATUS_TTL_MINUTES, 180))
-_TASK_CACHE_TTL_SECONDS = 15.0
-_TASK_LOCAL_FLUSH_INTERVAL_SECONDS = 2.0
-_TASK_REMOTE_SYNC_INTERVAL_SECONDS = 20.0
+_TASK_CACHE_TTL_SECONDS = 300.0
+_TASK_LOCAL_FLUSH_INTERVAL_SECONDS = 25.0
+_TASK_REMOTE_SYNC_INTERVAL_SECONDS = 300.0
 _LAST_ACTIVITY_FLUSH_INTERVAL_SECONDS = 30.0
 _TASKS_CACHE = None
 _TASKS_CACHE_LOADED_AT = 0.0
@@ -338,6 +357,8 @@ _SUPABASE_BOOTSTRAP_ATTEMPTED = False
 _SUPABASE_BOOTSTRAP_STATE = {"enabled": False, "ready": False, "message": "Supabase not configured"}
 _SUPABASE_REST_DISABLED_UNTIL = 0.0
 _SUPABASE_REST_BACKOFF_SECONDS = 300.0
+_SUPABASE_OFFLINE_UNTIL = 0.0
+_SUPABASE_OFFLINE_BACKOFF_SECONDS = 300.0
 _SUPABASE_SELECT_CACHE = {}
 _SUPABASE_SELECT_CACHE_TTL_SECONDS = 30.0
 _HYBRID_REMOTE_REFRESH_AT = {}
@@ -664,7 +685,10 @@ def _create_payload_table_sql(table: str, key_name: str, key_type: str) -> str:
 
 
 def ensure_supabase_schema(force: bool = False):
-    global _SUPABASE_BOOTSTRAP_ATTEMPTED, _SUPABASE_BOOTSTRAP_STATE
+    global _SUPABASE_BOOTSTRAP_ATTEMPTED, _SUPABASE_BOOTSTRAP_STATE, _SUPABASE_OFFLINE_UNTIL
+
+    if force:
+        _SUPABASE_OFFLINE_UNTIL = 0.0
 
     if _SUPABASE_BOOTSTRAP_ATTEMPTED and not force:
         return dict(_SUPABASE_BOOTSTRAP_STATE)
@@ -691,6 +715,7 @@ def ensure_supabase_schema(force: bool = False):
     except Exception as error:
         state["message"] = f"psycopg import failed: {error}"
         _SUPABASE_BOOTSTRAP_STATE = state
+        _SUPABASE_OFFLINE_UNTIL = time.time() + _SUPABASE_OFFLINE_BACKOFF_SECONDS
         return dict(state)
 
     statements = [f"create schema if not exists {_sql_ident(SUPABASE_SCHEMA)};"]
@@ -699,14 +724,20 @@ def ensure_supabase_schema(force: bool = False):
         statements.append(_create_payload_table_sql(table, key_name, key_type))
 
     try:
-        with psycopg.connect(SUPABASE_DB_URL, autocommit=True) as conn:
+        with psycopg.connect(SUPABASE_DB_URL, connect_timeout=min(2, max(1, int(SUPABASE_TIMEOUT or 2))), autocommit=True) as conn:
             with conn.cursor() as cursor:
                 for statement in statements:
                     cursor.execute(statement)
         state["ready"] = True
         state["message"] = "Supabase schema ready"
+        _SUPABASE_OFFLINE_UNTIL = 0.0
+        try:
+            hydrate_local_files_from_supabase()
+        except Exception:
+            pass
     except Exception as error:
         state["message"] = f"Supabase schema bootstrap failed: {error}"
+        _SUPABASE_OFFLINE_UNTIL = time.time() + _SUPABASE_OFFLINE_BACKOFF_SECONDS
 
     _SUPABASE_BOOTSTRAP_STATE = state
     return dict(state)
@@ -738,6 +769,23 @@ def get_supabase_status():
 
 def _supabase_enabled() -> bool:
     return bool(SUPABASE_URL and (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY))
+
+
+def _supabase_operational() -> bool:
+    if not _supabase_enabled():
+        return False
+    if not _SUPABASE_BOOTSTRAP_ATTEMPTED:
+        return False
+    if not _SUPABASE_BOOTSTRAP_STATE.get("ready"):
+        return False
+    if time.time() < float(_SUPABASE_OFFLINE_UNTIL or 0.0):
+        return False
+    return True
+
+
+def _mark_supabase_offline(error=None):
+    global _SUPABASE_OFFLINE_UNTIL
+    _SUPABASE_OFFLINE_UNTIL = time.time() + _SUPABASE_OFFLINE_BACKOFF_SECONDS
 
 
 def _supabase_auth_key() -> str:
@@ -954,21 +1002,32 @@ def _build_supabase_filters(filters=None) -> str:
 
 
 def _select_rows(table: str, filters=None):
+    if not _supabase_operational():
+        return []
     cached_rows = _get_cached_select_rows(table, filters)
     if cached_rows is not None:
         return [_decode_supabase_row(table, row) for row in cached_rows]
     select_clause = "*"
     if table in SUPABASE_PAYLOAD_TABLE_KEYS:
         select_clause = f"{_supabase_payload_key(table)},payload"
+    rows = []
     if not _should_try_supabase_rest(table):
-        rows = _supabase_db_read_rows(table, filters=filters)
+        try:
+            rows = _supabase_db_read_rows(table, filters=filters)
+        except Exception as exc:
+            _mark_supabase_offline(exc)
+            return []
     else:
         try:
             rows = _supabase_request("GET", f"/rest/v1/{table}?select={select_clause}{_build_supabase_filters(filters)}") or []
             _mark_supabase_rest_success()
         except Exception:
             _mark_supabase_rest_failure(table)
-            rows = _supabase_db_read_rows(table, filters=filters)
+            try:
+                rows = _supabase_db_read_rows(table, filters=filters)
+            except Exception as exc:
+                _mark_supabase_offline(exc)
+                return []
     if not isinstance(rows, list):
         return []
     _store_cached_select_rows(table, filters, rows)
@@ -976,19 +1035,31 @@ def _select_rows(table: str, filters=None):
 
 
 def _delete_rows(table: str, filters=None):
+    if not _supabase_operational():
+        return None
     _invalidate_select_cache(table)
     if not _should_try_supabase_rest(table):
-        return _supabase_db_delete_rows(table, filters=filters)
+        try:
+            return _supabase_db_delete_rows(table, filters=filters)
+        except Exception as exc:
+            _mark_supabase_offline(exc)
+            return None
     try:
         result = _supabase_request("DELETE", f"/rest/v1/{table}?{_build_supabase_filters(filters).lstrip('&')}", prefer="return=minimal")
         _mark_supabase_rest_success()
         return result
     except Exception:
         _mark_supabase_rest_failure(table)
-        return _supabase_db_delete_rows(table, filters=filters)
+        try:
+            return _supabase_db_delete_rows(table, filters=filters)
+        except Exception as exc:
+            _mark_supabase_offline(exc)
+            return None
 
 
 def _upsert_rows(table: str, rows, conflict_columns="id"):
+    if not _supabase_operational():
+        return []
     if not isinstance(rows, list):
         rows = [rows]
     if not rows:
@@ -996,7 +1067,11 @@ def _upsert_rows(table: str, rows, conflict_columns="id"):
     _invalidate_select_cache(table)
     payload_rows = [_prepare_supabase_row(table, row) for row in rows]
     if not _should_try_supabase_rest(table):
-        return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+        try:
+            return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+        except Exception as exc:
+            _mark_supabase_offline(exc)
+            return []
     try:
         result = _supabase_request(
             "POST",
@@ -1007,11 +1082,15 @@ def _upsert_rows(table: str, rows, conflict_columns="id"):
         return result
     except Exception:
         _mark_supabase_rest_failure(table)
-        return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+        try:
+            return _supabase_db_upsert_rows(table, rows, conflict_columns=conflict_columns)
+        except Exception as exc:
+            _mark_supabase_offline(exc)
+            return []
 
 
 def _replace_table_rows(table: str, rows):
-    if not _supabase_enabled():
+    if not _supabase_operational():
         return
     _invalidate_select_cache(table)
     key_name = _supabase_payload_key(table)
@@ -1433,7 +1512,7 @@ def _coerce_supabase_key_value(table: str, value):
 
 
 def _sync_full_local_map_to_supabase(path: str, table: str, key_name: str, normalizer):
-    if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
+    if not (_supabase_operational() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
         return {"total": 0, "prepared": 0, "skipped": 0, "synced": 0, "disabled": True}
     local_map = _load_local_map(path)
     rows = []
@@ -1457,7 +1536,7 @@ def _sync_full_local_map_to_supabase(path: str, table: str, key_name: str, norma
 
 
 def _replace_full_local_map_on_supabase(path: str, table: str, normalizer):
-    if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
+    if not (_supabase_operational() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
         return {"total": 0, "prepared": 0, "skipped": 0, "synced": 0, "disabled": True}
     local_map = _load_local_map(path)
     rows = []
@@ -1483,7 +1562,7 @@ def _get_hybrid_map(path: str, table: str, key_name: str, normalizer, prefer_loc
     local_map = _load_local_map(path)
     if _should_use_local_hybrid_fast_path(path, table, key_name, bool(local_map)):
         return local_map
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(table) or []
             remote_map = {}
@@ -1539,7 +1618,7 @@ def _upsert_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
     local_map[str(typed_key)] = normalized
     _save_local_map(path, local_map)
     _mark_hybrid_remote_refresh(path, table, key_name)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             _upsert_rows(table, normalized, conflict_columns=key_name)
         except Exception:
@@ -1553,7 +1632,7 @@ def _delete_hybrid_map_record(path: str, table: str, key_name: str, key_value: i
     local_map.pop(str(typed_key), None)
     _save_local_map(path, local_map)
     _mark_hybrid_remote_refresh(path, table, key_name)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             _delete_rows(table, {key_name: typed_key})
         except Exception:
@@ -1577,7 +1656,7 @@ def _normalize_settings_record(user_id: int, data=None):
 def save_all_settings(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(SETTINGS_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -1593,10 +1672,7 @@ def get_user_settings(user_id: int):
         all_settings = get_all_settings()
         uid = str(user_id)
         current = all_settings.get(uid, {})
-        merged = _normalize_settings(current)
-        if uid not in all_settings or any(current.get(k) != merged.get(k) for k in merged.keys() if k != "user_id"):
-            save_single_user_settings(user_id, merged)
-        return _normalize_settings(merged)
+        return _normalize_settings(current)
 
 
 def save_single_user_settings(user_id: int, data: dict):
@@ -1620,14 +1696,13 @@ def reset_user_settings(user_id: int):
 # STATE
 # =========================================================
 def get_all_states():
-    # User input state is latency-sensitive; prefer fresh local state over stale remote rows.
-    return _get_hybrid_map(STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record, prefer_local=True)
+    return _load_local_map(STATE_FILE)
 
 
 def save_all_states(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(STATE_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -1659,33 +1734,58 @@ def clear_user_state(user_id: int):
 
 
 def set_login_temp(user_id: int, key: str, value):
-    current = get_all_states().get(str(user_id), {})
+    states = _load_local_map(STATE_FILE)
+
+    current = states.get(str(user_id), {})
+
     if not isinstance(current, dict):
         current = {}
+
     current[key] = value
     current["last_updated_at"] = _now_iso()
-    _upsert_hybrid_map_record(STATE_FILE, SUPABASE_STATE_TABLE, "user_id", user_id, current, _normalize_state_record)
+
+    states[str(user_id)] = current
+
+    save_json(STATE_FILE, states)
 
 
 def get_login_temp(user_id: int, key: str, default=None):
-    current = get_all_states().get(str(user_id), {})
+    states = _load_local_map(STATE_FILE)
+
+    current = states.get(str(user_id), {})
+
     if isinstance(current, dict):
         return current.get(key, default)
+
     return default
 
 
 def clear_login_temp(user_id: int, *keys):
-    current = get_all_states().get(str(user_id), {})
+    states = _load_local_map(STATE_FILE)
+
+    current = states.get(str(user_id), {})
+
     if not isinstance(current, dict):
         return
+
     if keys:
         for key in keys:
             current.pop(str(key), None)
     else:
-        for key in ["phone", "phone_code_hash", "login_phone", "login_code", "login_password"]:
+        for key in [
+            "phone",
+            "phone_code_hash",
+            "login_phone",
+            "login_code",
+            "login_password"
+        ]:
             current.pop(key, None)
+
     current["last_updated_at"] = _now_iso()
-    _upsert_hybrid_map_record(STATE_FILE, SUPABASE_STATE_TABLE, "user_id", user_id, current, _normalize_state_record)
+
+    states[str(user_id)] = current
+
+    save_json(STATE_FILE, states)
 
 
 # =========================================================
@@ -1695,7 +1795,7 @@ def get_all_users():
     users = _load_local_map(USERS_FILE)
     if _should_use_local_hybrid_fast_path(USERS_FILE, SUPABASE_USERS_TABLE, "id", bool(users)):
         return users
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_USERS_TABLE) or []
             remote = {}
@@ -1720,7 +1820,7 @@ def get_all_users():
 def save_all_users(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(USERS_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -1800,7 +1900,7 @@ def get_banned_users():
     local = set(int(item) for item in data if str(item).lstrip("-").isdigit())
     if _should_use_local_hybrid_fast_path(BANNED_FILE, SUPABASE_BANNED_TABLE, "user_id", bool(local)):
         return local
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_BANNED_TABLE) or []
             remote = set()
@@ -1825,7 +1925,7 @@ def get_banned_users():
 def save_banned_users(data):
     clean = sorted({int(item) for item in data if str(item).lstrip("-").isdigit()})
     save_json(BANNED_FILE, clean)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = [_normalize_banned_user_record(user_id, {"updated_at": _now_iso()}) for user_id in clean]
             _replace_table_rows(SUPABASE_BANNED_TABLE, rows)
@@ -1870,7 +1970,7 @@ def get_all_premium_users():
 def save_all_premium_users(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(PREMIUM_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -2042,7 +2142,7 @@ def get_all_user_limits():
 def save_all_user_limits(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(USER_LIMITS_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -2174,7 +2274,7 @@ def get_all_index_entries():
     if _should_use_local_hybrid_fast_path(INDEX_FILE, SUPABASE_INDEX_TABLE, "index_no", bool(local_rows)):
         return [local_rows[key] for key in sorted(local_rows)]
 
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_INDEX_TABLE) or []
             remote_rows = {}
@@ -2207,7 +2307,7 @@ def save_all_index_entries(data):
         normalized.append(_normalize_index_entry_record(index_no, row))
     normalized.sort(key=lambda item: int(item.get("index_no", 0) or 0))
     _save_local_list(INDEX_FILE, normalized)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             _replace_table_rows(SUPABASE_INDEX_TABLE, normalized)
         except Exception:
@@ -2254,7 +2354,7 @@ def get_index_state():
 def save_index_state(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(INDEX_STATE_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -2416,7 +2516,7 @@ def get_all_user_sessions():
 def save_all_user_sessions(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(SESSION_STORE_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for uid, row in data.items():
@@ -2504,7 +2604,7 @@ def get_all_tasks(force_refresh: bool = False):
     else:
         normalized_local = local_tasks
 
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_TASKS_TABLE) or []
             remote = {}
@@ -2602,10 +2702,19 @@ def _sync_local_broadcast_logs_to_supabase(prune_missing: bool = False):
 
 
 def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: bool = False):
-    if not (_supabase_enabled() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
+    if not (_supabase_operational() and ENABLE_LOCAL_FALLBACK and SYNC_LOCAL_TO_SUPABASE):
         return {"enabled": False, "synced": []}
 
     schema_state = ensure_supabase_schema(force=force)
+    if not (isinstance(schema_state, dict) and schema_state.get("ready")):
+        return {
+            "enabled": True,
+            "ready": False,
+            "synced": [],
+            "errors": [schema_state.get("message", "Supabase schema not ready")] if isinstance(schema_state, dict) else ["Supabase schema not ready"],
+            "details": {},
+        }
+
     synced = []
     errors = []
     details = {}
@@ -2658,6 +2767,83 @@ def sync_local_persistent_data_to_supabase(force: bool = False, prune_missing: b
     return {"enabled": True, "synced": synced, "errors": errors, "schema_state": schema_state, "details": details}
 
 
+def hydrate_local_files_from_supabase():
+    if not _supabase_operational():
+        return {"enabled": False, "hydrated": []}
+
+    hydrated = []
+    map_tables = [
+        (USERS_FILE, SUPABASE_USERS_TABLE, "id", _normalize_user_record),
+        (SETTINGS_FILE, SUPABASE_SETTINGS_TABLE, "user_id", _normalize_settings_record),
+        (STATE_FILE, SUPABASE_STATE_TABLE, "user_id", _normalize_state_record),
+        (PREMIUM_FILE, SUPABASE_PREMIUM_TABLE, "user_id", _normalize_premium_record),
+        (TASKS_FILE, SUPABASE_TASKS_TABLE, "id", _normalize_task_record),
+        (SESSION_STORE_FILE, SUPABASE_SESSIONS_TABLE, "user_id", _normalize_session_record),
+        (USER_LIMITS_FILE, SUPABASE_USER_LIMITS_TABLE, "user_id", _normalize_user_limit_record),
+        (INDEX_STATE_FILE, SUPABASE_INDEX_STATE_TABLE, "user_id", _normalize_index_state_record),
+        (FAILED_TASKS_FILE, SUPABASE_FAILED_TASKS_TABLE, "task_id", _normalize_failed_task_record),
+    ]
+
+    for file_path, table, key_name, normalizer in map_tables:
+        try:
+            rows = _select_rows(table) or []
+            if rows:
+                local_map = _load_local_map(file_path)
+                changed = False
+                for row in rows:
+                    typed_key = _coerce_supabase_key_value(table, row.get(key_name))
+                    row_key = str(typed_key)
+                    if row_key and row_key not in local_map:
+                        local_map[row_key] = normalizer(typed_key, row)
+                        changed = True
+                if changed:
+                    _save_local_map(file_path, local_map)
+                    hydrated.append(table)
+        except Exception:
+            pass
+
+    try:
+        rows = _select_rows(SUPABASE_STATS_TABLE, {"id": 1}) or []
+        if rows:
+            save_json(STATS_FILE, _normalize_stats(rows[0]))
+            hydrated.append(SUPABASE_STATS_TABLE)
+    except Exception:
+        pass
+
+    try:
+        rows = _select_rows(SUPABASE_BANNED_TABLE) or []
+        if rows:
+            local_banned = set(load_json(BANNED_FILE, []))
+            for row in rows:
+                uid = _to_int(row.get("user_id"), 0)
+                if uid:
+                    local_banned.add(uid)
+            save_json(BANNED_FILE, sorted(local_banned))
+            hydrated.append(SUPABASE_BANNED_TABLE)
+    except Exception:
+        pass
+
+    return {"enabled": True, "hydrated": hydrated}
+
+
+def flush_all_storage_caches():
+    global _TASKS_CACHE, _TASKS_LAST_LOCAL_SAVE_AT, _LAST_ACTIVITY_SAVE_AT
+    with _LOCK:
+        if isinstance(_TASKS_CACHE, dict) and _TASKS_CACHE:
+            _save_local_map(TASKS_FILE, _TASKS_CACHE)
+            _TASKS_LAST_LOCAL_SAVE_AT = time.time()
+        touch_last_activity(force=True)
+        if _supabase_operational():
+            try:
+                _sync_tasks_to_supabase(prune_missing=False)
+                _sync_stats_to_supabase()
+            except Exception:
+                pass
+
+
+atexit.register(flush_all_storage_caches)
+
+
 def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):
     global _TASKS_LAST_LOCAL_SAVE_AT, _TASKS_LAST_REMOTE_SYNC_AT
     data = data if isinstance(data, dict) else {}
@@ -2673,7 +2859,7 @@ def save_all_tasks(data, *, sync_remote: bool = True, force_local: bool = True):
 
     should_sync_remote = (
         sync_remote
-        and _supabase_enabled()
+        and _supabase_operational()
         and (force_local or has_terminal or (now - float(_TASKS_LAST_REMOTE_SYNC_AT or 0.0)) >= _TASK_REMOTE_SYNC_INTERVAL_SECONDS)
     )
     if should_sync_remote:
@@ -2731,7 +2917,7 @@ def delete_task(task_id: str):
     tasks = get_all_tasks()
     tasks.pop(task_id, None)
     save_all_tasks(tasks, sync_remote=True, force_local=True)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             _delete_rows(SUPABASE_TASKS_TABLE, {"id": task_id})
         except Exception:
@@ -2778,7 +2964,7 @@ def cleanup_old_tasks(hours: int = 24):
 # =========================================================
 def get_stats():
     local = _normalize_stats(load_json(STATS_FILE, DEFAULT_STATS))
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_STATS_TABLE, {"id": 1}) or []
             if rows:
@@ -2794,7 +2980,7 @@ def get_stats():
 def save_stats(data: dict):
     clean = _normalize_stats(data or {})
     save_json(STATS_FILE, clean)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             payload = dict(clean)
             payload["id"] = 1
@@ -2845,7 +3031,7 @@ def get_failed_tasks():
 def save_failed_tasks(data):
     data = data if isinstance(data, dict) else {}
     _save_local_map(FAILED_TASKS_FILE, data)
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = []
             for task_id, row in data.items():
@@ -2874,7 +3060,7 @@ def get_broadcast_logs():
     local = load_json(BROADCAST_LOG_FILE, [])
     if not isinstance(local, list):
         local = []
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             rows = _select_rows(SUPABASE_BROADCAST_TABLE) or []
             rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
@@ -2892,7 +3078,7 @@ def add_broadcast_log(entry: dict):
     clean["created_at"] = clean.get("created_at") or _utcnow_naive_iso()
     logs.insert(0, clean)
     save_json(BROADCAST_LOG_FILE, logs[:500])
-    if _supabase_enabled():
+    if _supabase_operational():
         try:
             _upsert_rows(SUPABASE_BROADCAST_TABLE, clean, conflict_columns="created_at")
         except Exception:
@@ -3008,7 +3194,8 @@ def restore_backup_snapshot(path: str, sync_remote: bool = True):
 
 def initialize_storage():
     hydrate_local_files()
-    ensure_supabase_schema(force=False)
+    if _supabase_enabled() and not _SUPABASE_BOOTSTRAP_ATTEMPTED:
+        threading.Thread(target=ensure_supabase_schema, kwargs={"force": False}, daemon=True, name="supabase-bootstrap").start()
     normalize_existing_tasks_inplace()
     cleanup_stale_active_tasks()
     cleanup_runtime_artifacts()
@@ -3080,34 +3267,3 @@ def get_settings_marks(user_id: int):
         is_premium=is_premium_user(user_id),
         setting_mark_fn=setting_mark,
     )
-    telegram_mode = str(settings.get("telegram_upload_mode", settings.get("upload_mode", "media")) or "media").strip().lower()
-    has_replace_rules = bool(
-        settings.get("replace_words_file")
-        or settings.get("replace_words_caption")
-        or settings.get("replace_words")
-    )
-    return {
-        "storage_mode": {"telegram": "📨", "gdrive": "☁️", "rclone": "🗂"}.get(storage_mode, "📨"),
-        "upload_mode": "📄" if telegram_mode == "document" else "🎞",
-        "thumbnail": setting_mark(settings.get("thumbnail_file_id")),
-        "caption": "✅" if caption_state.get("enabled") and caption_state.get("text") else "❌",
-        "prefix": setting_mark(settings.get("prefix")),
-        "suffix": setting_mark(settings.get("suffix")),
-        "auto_rename": setting_mark(settings.get("auto_rename") or settings.get("rename_template") or settings.get("filename_prefix") or settings.get("filename_suffix")),
-        "metadata": "✅" if settings.get("metadata_enabled") else "❌",
-        "destination": setting_mark(settings.get("upload_destination")),
-        "topic_id": setting_mark(settings.get("topic_id")),
-        "replace_words": setting_mark(has_replace_rules),
-        "index_mode": "✅" if settings.get("index_mode") else "❌",
-        "batch_mode": "✅" if settings.get("batch_mode") else "❌",
-        "login": "✅" if has_user_session(user_id) else "❌",
-        "premium": "💎" if is_premium_user(user_id) else "🆓",
-        "gdrive_token": setting_mark(settings.get("gdrive_token_path")),
-        "gdrive_folder": setting_mark(settings.get("gdrive_folder_id")),
-        "gdrive": setting_mark(settings.get("gdrive_folder_id") and settings.get("gdrive_token_path")),
-        "rclone_config": setting_mark(settings.get("rclone_config_path")),
-        "rclone_path": setting_mark(settings.get("rclone_remote_path")),
-        "rclone": setting_mark(settings.get("rclone_remote_path") and settings.get("rclone_config_path")),
-        "personal_bot": setting_mark(settings.get("personal_bot_token")),
-        "route_template": setting_mark(settings.get("route_template") and str(settings.get("route_template")) != "off"),
-    }

@@ -3,6 +3,10 @@ from __future__ import annotations
 from runtime_context import *
 from services.storage_service import *
 from services.task_service import *
+from services.task_service import (
+    _register_task_to_batch_board,
+    _refresh_batch_board_message,
+)
 from services.worker_service import *
 from services.link_service import *
 
@@ -77,7 +81,7 @@ async def process_link_task_impl(client, user_id: int, message, link_text: str, 
     except Exception as exc:
         if batch_mode:
             return False
-        await edit_or_reply(message, f"Ã¢ÂÅ’ {exc}")
+        await edit_or_reply(message, f"❌ {exc}")
         return False
 
     if info and str(info.get("link_type") or "").lower() in {"private", "private_topic"} and not has_user_session(user_id):
@@ -94,17 +98,18 @@ async def process_link_task_impl(client, user_id: int, message, link_text: str, 
     if running_now >= user_task_limit:
         if batch_mode:
             return False
-        warn = f"Ã¢Å¡Â Ã¯Â¸Â Ek time par max {user_task_limit} running tasks allowed hain."
+        warn = f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain."
         await edit_or_reply(message, warn)
         return False
 
     if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
         if batch_mode:
             return False
-        warn = "Ã¢Å¡Â Ã¯Â¸Â Queue full hai. Thodi der baad try karo."
+        warn = "⚠️ Queue full hai. Thodi der baad try karo."
         await edit_or_reply(message, warn)
         return False
 
+    await asyncio.sleep(0)
     task_id = make_task_id()
     queue_position = TASK_QUEUE.qsize() + 1
     payload = _build_task_payload(
@@ -141,6 +146,7 @@ async def process_link_task_impl(client, user_id: int, message, link_text: str, 
         await update_task_status_message(client, task_id, done=True)
         return False
 
+    await asyncio.sleep(0)
     await TASK_QUEUE.put({
         "task_id": task_id,
         "user_id": user_id,
@@ -173,9 +179,9 @@ async def enqueue_direct_message_task_impl(client, user_id: int, message):
         if getattr(message, "photo", None):
             update_user_settings(user_id, {"thumbnail_file_id": message.photo.file_id, "thumbnail_enabled": True})
             clear_user_state(user_id)
-            await message.reply_text("Ã¢Å“â€¦ Custom thumbnail save ho gaya.\n\n/settings bhejo dekhne ke liye.")
+            await message.reply_text("✅ Custom thumbnail save ho gaya.\n\n/settings bhejo dekhne ke liye.")
             return False
-        await message.reply_text("Ã¢ÂÅ’ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho.")
+        await message.reply_text("❌ Thumbnail ke liye photo bhejna zaroori hai. /cancel bhej kar cancel kar sakte ho.")
         return False
 
     settings = get_user_settings(user_id)
@@ -189,7 +195,7 @@ async def enqueue_direct_message_task_impl(client, user_id: int, message):
     try:
         ensure_storage_runtime_ready(settings, ensure_shared_user_site_packages)
     except Exception as exc:
-        await message.reply_text(f"Ã¢ÂÅ’ {exc}")
+        await message.reply_text(f"❌ {exc}")
         return False
 
     cleanup_stale_active_tasks()
@@ -198,13 +204,14 @@ async def enqueue_direct_message_task_impl(client, user_id: int, message):
     queue_now = TASK_QUEUE.qsize()
 
     if running_now >= user_task_limit:
-        await message.reply_text(f"Ã¢Å¡Â Ã¯Â¸Â Ek time par max {user_task_limit} running tasks allowed hain.")
+        await message.reply_text(f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain.")
         return False
 
     if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
-        await message.reply_text("Ã¢Å¡Â Ã¯Â¸Â Queue full hai. Thodi der baad try karo.")
+        await message.reply_text("⚠️ Queue full hai. Thodi der baad try karo.")
         return False
 
+    await asyncio.sleep(0)
     task_id = make_task_id()
     queue_position = TASK_QUEUE.qsize() + 1
     source_label = f"direct:{message.id}"
@@ -234,6 +241,7 @@ async def enqueue_direct_message_task_impl(client, user_id: int, message):
         await update_task_status_message(client, task_id, done=True)
         return False
 
+    await asyncio.sleep(0)
     await TASK_QUEUE.put({
         "task_id": task_id,
         "user_id": user_id,

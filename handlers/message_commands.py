@@ -4,6 +4,10 @@ from runtime_context import *
 from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
+from features.plan_manager import get_active_plans
+from keyboards import buy_plans_markup
+from texts import buy_plans_text
+
 
 async def handle_message_commands(client, message, user_id: int, text_raw: str, lowered: str, state: str):
     if await handle_admin_commands(client, message, lowered):
@@ -19,14 +23,18 @@ async def handle_message_commands(client, message, user_id: int, text_raw: str, 
             cancelled_ids.extend(_cancel_batch_tasks(user_id, board.get("batch_key"), only_current=False, return_task_ids=True))
         cancelled_ids.extend(_cancel_active_tasks_for_user(user_id, limit=2000, return_task_ids=True))
         cancelled_ids = list(dict.fromkeys([task_id for task_id in cancelled_ids if str(task_id).strip()]))
+
         for task_id in cancelled_ids:
             await update_task_status_message(client, task_id, done=True)
         if _get_batch_board(user_id):
-            await _refresh_batch_board_message(client, user_id)
+            try:
+                await _refresh_batch_board_message(client, user_id)
+            except Exception:
+                pass
         if cancelled_ids:
-            await message.reply_text(f"ðŸ§¹ {len(cancelled_ids)} active task(s) cancel kar diye gaye.")
+            await message.reply_text(f"{len(cancelled_ids)} active task(s) cancel kar diye gaye.")
         else:
-            await message.reply_text("âŒ Koi active task nahi mila.")
+            await message.reply_text("Koi active task nahi mila.")
         return True
 
     if lowered.startswith("/cancel"):
@@ -40,28 +48,32 @@ async def handle_message_commands(client, message, user_id: int, text_raw: str, 
             cancelled_ids.extend(_cancel_batch_tasks(user_id, board.get("batch_key"), only_current=True, return_task_ids=True))
         cancelled_ids.extend(_cancel_active_tasks_for_user(user_id, limit=1, return_task_ids=True))
         cancelled_ids = list(dict.fromkeys([task_id for task_id in cancelled_ids if str(task_id).strip()]))
+
         for task_id in cancelled_ids:
             await update_task_status_message(client, task_id, done=True)
         if cancelled_ids and _get_batch_board(user_id):
-            await _refresh_batch_board_message(client, user_id)
+            try:
+                await _refresh_batch_board_message(client, user_id)
+            except Exception:
+                pass
         if had_input_state and cancelled_ids:
-            await message.reply_text("âŒ Current input mode aur current running task cancel kar diya gaya.")
+            await message.reply_text("Current input mode aur current running task cancel kar diya gaya.")
         elif had_input_state:
-            await message.reply_text("âŒ Current input mode cancel kar diya gaya.")
+            await message.reply_text("Current input mode cancel kar diya gaya.")
         elif cancelled_ids:
-            await message.reply_text("ðŸ›‘ Current running task cancel kar diya gaya.")
+            await message.reply_text("Current running task cancel kar diya gaya.")
         else:
-            await message.reply_text("âŒ Koi active input mode ya running task nahi mila.")
+            await message.reply_text("Koi active input mode ya running task nahi mila.")
         return True
 
     if lowered.startswith("/ping"):
-        await message.reply_text("âœ… Bot online hai aur sahi se reply kar raha hai.")
+        await message.reply_text("Bot online hai aur sahi se reply kar raha hai.")
         return True
 
     if lowered.startswith("/start"):
         reset_user_index_counter(user_id)
         await message.reply_text(
-            start_text() + "\n\nðŸ”„ Tumhara current user index reset ho gaya hai. Ab next item `01` se start hoga.",
+            start_text() + "\n\nTumhara current user index reset ho gaya hai. Ab next item `01` se start hoga.",
             reply_markup=build_start_markup(user_id),
             disable_web_page_preview=True,
         )
@@ -69,6 +81,15 @@ async def handle_message_commands(client, message, user_id: int, text_raw: str, 
 
     if lowered.startswith("/help"):
         await message.reply_text(help_text(is_admin(user_id)))
+        return True
+
+    if lowered.startswith("/buy") or lowered == "/plans":
+        active_plans = get_active_plans()
+        await message.reply_text(
+            buy_plans_text(),
+            reply_markup=buy_plans_markup(active_plans),
+            disable_web_page_preview=True,
+        )
         return True
 
     if lowered.startswith("/plan"):
@@ -104,7 +125,11 @@ async def handle_message_commands(client, message, user_id: int, text_raw: str, 
 
     if lowered.startswith("/my_tasks"):
         tasks = get_user_tasks(user_id, limit=10)
-        await message.reply_text(my_tasks_text(tasks), reply_markup=my_tasks_buttons(include_cleanup=True), disable_web_page_preview=True)
+        await message.reply_text(
+            my_tasks_text(tasks),
+            reply_markup=my_tasks_buttons(include_cleanup=True),
+            disable_web_page_preview=True,
+        )
         return True
 
     if should_send_unknown_reply(message, text_raw):

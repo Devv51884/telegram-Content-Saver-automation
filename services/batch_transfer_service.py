@@ -3,7 +3,16 @@ from __future__ import annotations
 from runtime_context import *
 from services.storage_service import *
 from services.task_service import *
+from services.task_service import (
+    _get_batch_board,
+    _save_batch_board,
+    _open_batch_board,
+    _refresh_batch_board_message,
+)
 from services.worker_service import *
+from services.worker_service import (
+    _run_task_attempts,
+)
 from services.link_service import *
 from services.queue_task_service import *
 
@@ -39,7 +48,7 @@ def derive_batch_name(raw_text: str, links: list[str] | None = None) -> str:
 async def process_batch_links_impl(client, user_id: int, message, raw_text: str, links: list[str] | None = None):
     links = list(links or parse_batch_links(raw_text))
     if not links:
-        await message.reply_text("Ã¢ÂÅ’ Batch me koi valid Telegram links nahi mile.")
+        await message.reply_text("❌ Batch me koi valid Telegram links nahi mile.")
         return
 
     save_batch_input(user_id, raw_text)
@@ -47,7 +56,7 @@ async def process_batch_links_impl(client, user_id: int, message, raw_text: str,
     try:
         ensure_storage_runtime_ready(batch_settings, ensure_shared_user_site_packages)
     except Exception as exc:
-        await message.reply_text(f"Ã¢ÂÅ’ Batch start nahi hua: {exc}")
+        await message.reply_text(f"❌ Batch start nahi hua: {exc}")
         return
 
     user_batch_limit = get_user_batch_limit(user_id)
@@ -59,6 +68,8 @@ async def process_batch_links_impl(client, user_id: int, message, raw_text: str,
 
     success = 0
     failed = 0
+
+    await asyncio.sleep(0)
 
     for idx, link in enumerate(links, start=1):
         board = _get_batch_board(user_id)
@@ -108,6 +119,7 @@ async def process_batch_links_impl(client, user_id: int, message, raw_text: str,
             "worker_id": 0,
             "is_visible": False,
         })
+        await asyncio.sleep(0)
         await update_task_status_message(client, task_id, done=False)
 
         ok = await _run_task_attempts(client, item)
@@ -134,7 +146,7 @@ async def process_batch_links_impl(client, user_id: int, message, raw_text: str,
             board = _get_batch_board(user_id)
             if board and bool(board.get("cancel_all_requested")):
                 break
-            await asyncio.sleep(BATCH_DELAY)
+            await asyncio.sleep(max(BATCH_DELAY, 0.2))
 
     board = _get_batch_board(user_id)
     if board:

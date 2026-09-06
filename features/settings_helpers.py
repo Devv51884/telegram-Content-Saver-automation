@@ -11,7 +11,7 @@ def normalize_target(target):
         return None
     if isinstance(target, int):
         return target
-    target = str(target or "").strip()
+    target = (target or "").strip() if isinstance(target, str) else str(target or "").strip()
     if not target:
         return None
     if target.lstrip("-").isdigit():
@@ -24,7 +24,7 @@ def safe_topic_id(value):
         return None
     if isinstance(value, int):
         return value
-    value = str(value or "").strip()
+    value = (value or "").strip() if isinstance(value, str) else str(value or "").strip()
     if value.lstrip("-").isdigit():
         return int(value)
     return None
@@ -37,7 +37,8 @@ def make_task_id() -> str:
 def sanitize_filename(name: str) -> str:
     if not name:
         return "file"
-    for char in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
+    INVALID_FILENAME_CHARS = ['\\', '/', ':', '*', '?', '"', '<', '>', '|']
+    for char in INVALID_FILENAME_CHARS:
         name = name.replace(char, " ")
     return " ".join(name.split()).strip() or "file"
 
@@ -55,7 +56,8 @@ def apply_replace_rules(value: str, rules: str) -> str:
     if not rules:
         return value
 
-    for part in rules.split(","):
+    parts = rules.split(",")
+    for part in parts:
         part = part.strip()
         if not part:
             continue
@@ -84,7 +86,7 @@ def update_replace_rule_settings(
     file_rules: str | None = None,
     caption_rules: str | None = None,
 ):
-    current = dict(settings or get_user_settings(user_id) or {})
+    current = dict(settings if settings is not None else (get_user_settings(user_id) or {}))
     next_file_rules = str(get_file_replace_rules(current) if file_rules is None else file_rules or "").strip()
     next_caption_rules = str(get_caption_replace_rules(current) if caption_rules is None else caption_rules or "").strip()
     legacy_rules = next_file_rules if next_file_rules and next_file_rules == next_caption_rules else ""
