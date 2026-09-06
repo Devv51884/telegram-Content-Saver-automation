@@ -1300,24 +1300,52 @@ def buy_plans_text():
     )
 
 
+def plan_duration_selection_text(plan: dict, durations: list[dict] | None = None):
+    p_name = plan.get("name") or "Premium Plan"
+    batch_limit = plan.get("batch_limit", 50)
+    task_limit = plan.get("task_limit", 3)
+    storage = str(plan.get("storage_modes", "telegram,personal_bot")).replace(",", ", ")
+    features = plan.get("features") or []
+    if features:
+        feat_lines = "\n".join([f"  • {f}" for f in features])
+    else:
+        feat_lines = f"  • {batch_limit} Batch Links Limit\n  • {task_limit} Simultaneous Tasks\n  • Storage: {storage}"
+
+    return (
+        f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"  💎 **{p_name.upper()}** 💎\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
+        f"⚡ **Plan Specifications:**\n"
+        f"  • 📦 **Batch Limit:** `{batch_limit}` Links\n"
+        f"  • 🚀 **Parallel Tasks:** `{task_limit}` Simultaneous\n"
+        f"  • ☁️ **Storage Modes:** `{storage}`\n\n"
+        f"✨ **Features Included:**\n{feat_lines}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👇 **Apni requirement ke anusaar plan validity (duration) chunein:**"
+    )
+
+
 def order_payment_text(order: dict, upi_id: str):
     import time
     time_left = max(0, int(order.get("expires_at", 0)) - int(time.time()))
     mins, secs = divmod(time_left, 60)
+    dur_label = order.get("duration_label") or f"{order.get('duration_days', 30)} Days"
     return (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
         f"  💳 **PAYMENT QR & INVOICE** 💳\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"📦 **Plan:** `{order.get('plan_name')}`\n"
+        f"⏳ **Validity:** `{dur_label}`\n"
         f"💰 **Amount:** `₹{order.get('amount')}`\n"
         f"🆔 **Order ID:** `{order.get('order_id')}`\n"
-        f"⏱️ **Validity:** `{mins:02d}:{secs:02d}` (5 Minutes)\n"
-        f"🏦 **UPI ID:** `{upi_id}`\n\n"
+        f"⏱️ **Timer:** `{mins:02d}:{secs:02d}` (5 Minutes)\n"
+        f"🏦 **UPI ID:** `{upi_id}` *(Tap to copy)*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"**Payment Instructions:**\n"
-        f"1. Upar diye gaye QR Code ko scan karein (GPay / PhonePe / Paytm).\n"
-        f"2. Exact ₹{order.get('amount')} pay karein.\n"
+        f"1. Upar diye gaye QR Code ko kisi bhi UPI app (Paytm / PhonePe / GPay) se scan karein.\n"
+        f"2. Exact **₹{order.get('amount')}** pay karein.\n"
         f"3. Pay karne ke baad **'🔄 Check Payment Status'** dabayein.\n"
         f"4. Ya phir **'✅ Submit 12-Digit UTR'** dabakar apna UTR submit karein.\n\n"
-        f"⚠️ *Payment 5 minute ke andar karein.*"
+        f"⚠️ *Payment 5 minute ke andar complete karein.*"
     )
 

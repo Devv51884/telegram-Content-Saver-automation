@@ -8,7 +8,7 @@ import uuid
 from threading import RLock
 
 from config import DATA_DIR
-from features.plan_manager import get_plan_by_id
+from features.plan_manager import get_plan_by_id, get_plan_duration_info
 
 ORDERS_FILE = os.path.join(DATA_DIR, "orders.json")
 _ORDER_LOCK = RLock()
@@ -34,11 +34,12 @@ def _save_orders(orders: dict):
     os.replace(temp_path, ORDERS_FILE)
 
 
-def create_order(user_id: int, plan_id: str) -> dict:
+def create_order(user_id: int, plan_id: str, duration_key: str = "30d") -> dict:
     plan = get_plan_by_id(plan_id)
     if not plan:
         raise ValueError(f"Plan '{plan_id}' nahi mila.")
 
+    dur_info = get_plan_duration_info(plan, duration_key)
     now = int(time.time())
     order_id = f"CD{now % 1000000}{uuid.uuid4().hex[:4].upper()}"
 
@@ -46,9 +47,12 @@ def create_order(user_id: int, plan_id: str) -> dict:
         "order_id": order_id,
         "user_id": int(user_id),
         "plan_id": plan["id"],
-        "plan_name": plan["name"],
-        "amount": int(plan["price"]),
-        "duration_days": int(plan["duration_days"]),
+        "plan_name": f"{plan['name']} ({dur_info['label']})",
+        "base_plan_name": plan["name"],
+        "duration_key": dur_info["key"],
+        "duration_label": dur_info["label"],
+        "duration_days": int(dur_info["days"]),
+        "amount": int(dur_info["price"]),
         "batch_limit": int(plan["batch_limit"]),
         "task_limit": int(plan["task_limit"]),
         "storage_modes": str(plan["storage_modes"]),

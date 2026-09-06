@@ -703,14 +703,15 @@ def storage_mode_buttons(current_mode: str = "telegram", allowed_modes: list[str
 
 
 def buy_plans_markup(active_plans: list[dict]):
+    from features.plan_manager import get_plan_durations
     rows = []
     for plan in active_plans:
         p_name = plan.get("name") or "Plan"
-        p_price = plan.get("price", 99)
-        p_days = plan.get("duration_days", 30)
         p_id = plan.get("id")
-        btn_text = f"💎 {p_name} — ₹{p_price} ({p_days}d)"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"buy_select:{p_id}")])
+        durations = get_plan_durations(plan)
+        min_price = min([d["price"] for d in durations]) if durations else plan.get("price", 99)
+        btn_text = f"💎 {p_name} — From ₹{min_price}"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"buy_plan:{p_id}")])
     rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data="show_premium_info"),
         InlineKeyboardButton("❌ Close", callback_data="close_settings"),
@@ -718,24 +719,35 @@ def buy_plans_markup(active_plans: list[dict]):
     return InlineKeyboardMarkup(rows)
 
 
-def order_payment_markup(order_id: str, deep_links: dict | None = None):
-    deep_links = deep_links or {}
-    rows = [
-        [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"pay_check:{order_id}")],
-    ]
-    app_buttons = []
-    if deep_links.get("paytm"):
-        app_buttons.append(InlineKeyboardButton("📱 Open Paytm", url=deep_links["paytm"]))
-    if deep_links.get("phonepe"):
-        app_buttons.append(InlineKeyboardButton("📱 Open PhonePe", url=deep_links["phonepe"]))
-    if app_buttons:
-        rows.append(app_buttons)
-
+def plan_durations_markup(plan_id: str, durations: list[dict]):
+    rows = []
+    row = []
+    for dur in durations:
+        btn = InlineKeyboardButton(
+            dur["display"],
+            callback_data=f"buy_dur:{plan_id}:{dur['key']}",
+        )
+        row.append(btn)
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([
-        InlineKeyboardButton("✅ Submit 12-Digit UTR", callback_data=f"pay_utr:{order_id}"),
-        InlineKeyboardButton("❌ Cancel Order", callback_data=f"pay_cancel:{order_id}"),
+        InlineKeyboardButton("⬅️ Back to Plans", callback_data="buy_plans_menu"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def order_payment_markup(order_id: str, deep_links: dict | None = None):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"pay_check:{order_id}")],
+        [
+            InlineKeyboardButton("✅ Submit 12-Digit UTR", callback_data=f"pay_utr:{order_id}"),
+            InlineKeyboardButton("❌ Cancel Order", callback_data=f"pay_cancel:{order_id}"),
+        ],
+    ])
 
 
 def admin_payment_approval_markup(order_id: str):

@@ -10,12 +10,57 @@ PLANS_FILE = os.path.join(DATA_DIR, "plans.json")
 PAYMENT_CONFIG_FILE = os.path.join(DATA_DIR, "payment_config.json")
 _PLAN_LOCK = RLock()
 
+DEFAULT_DURATION_OPTIONS = [
+    {"key": "1d", "label": "1 Day", "days": 1, "emoji": "⚡"},
+    {"key": "7d", "label": "7 Days", "days": 7, "emoji": "🗓️"},
+    {"key": "15d", "label": "15 Days", "days": 15, "emoji": "📅"},
+    {"key": "30d", "label": "30 Days", "days": 30, "emoji": "⭐"},
+    {"key": "365d", "label": "1 Year", "days": 365, "emoji": "👑"},
+    {"key": "lifetime", "label": "Lifetime", "days": 3650, "emoji": "♾️"},
+]
+
+DEFAULT_TIER_DURATIONS = {
+    "silver": {
+        "1d": 19,
+        "7d": 49,
+        "15d": 69,
+        "30d": 99,
+        "365d": 499,
+        "lifetime": 999,
+    },
+    "gold": {
+        "1d": 29,
+        "7d": 79,
+        "15d": 119,
+        "30d": 199,
+        "365d": 899,
+        "lifetime": 1499,
+    },
+    "diamond": {
+        "1d": 49,
+        "7d": 149,
+        "15d": 249,
+        "30d": 499,
+        "365d": 1999,
+        "lifetime": 2999,
+    },
+    "lifetime": {
+        "1d": 59,
+        "7d": 199,
+        "15d": 349,
+        "30d": 499,
+        "365d": 799,
+        "lifetime": 999,
+    },
+}
+
 DEFAULT_PLANS = {
     "silver": {
         "id": "silver",
         "name": "Silver Plan 🥉",
         "price": 99,
         "duration_days": 30,
+        "durations": DEFAULT_TIER_DURATIONS["silver"],
         "batch_limit": 50,
         "task_limit": 3,
         "storage_modes": "telegram,personal_bot",
@@ -33,6 +78,7 @@ DEFAULT_PLANS = {
         "name": "Gold Plan 🥈",
         "price": 199,
         "duration_days": 30,
+        "durations": DEFAULT_TIER_DURATIONS["gold"],
         "batch_limit": 200,
         "task_limit": 5,
         "storage_modes": "telegram,gdrive,personal_bot",
@@ -51,6 +97,7 @@ DEFAULT_PLANS = {
         "name": "Diamond VIP 🥇",
         "price": 499,
         "duration_days": 30,
+        "durations": DEFAULT_TIER_DURATIONS["diamond"],
         "batch_limit": 500,
         "task_limit": 8,
         "storage_modes": "telegram,gdrive,rclone,personal_bot",
@@ -69,6 +116,7 @@ DEFAULT_PLANS = {
         "name": "Lifetime Elite 👑",
         "price": 999,
         "duration_days": 3650,
+        "durations": DEFAULT_TIER_DURATIONS["lifetime"],
         "batch_limit": 1000,
         "task_limit": 10,
         "storage_modes": "telegram,gdrive,rclone,personal_bot",
@@ -122,17 +170,93 @@ def get_plan_by_id(plan_id: str) -> dict | None:
     return plans.get(str(plan_id).strip().lower())
 
 
+def get_plan_durations(plan_or_id: str | dict) -> list[dict]:
+    if isinstance(plan_or_id, str):
+        plan = get_plan_by_id(plan_or_id) or {}
+        plan_id = plan_or_id.strip().lower()
+    elif isinstance(plan_or_id, dict):
+        plan = dict(plan_or_id)
+        plan_id = str(plan.get("id", "")).strip().lower()
+    else:
+        plan = {}
+        plan_id = ""
+
+    custom_durations = plan.get("durations") if isinstance(plan.get("durations"), dict) else None
+    tier_defaults = DEFAULT_TIER_DURATIONS.get(plan_id, {})
+    base_price = int(plan.get("price", 99))
+
+    durations_list = []
+    for opt in DEFAULT_DURATION_OPTIONS:
+        key = opt["key"]
+        label = opt["label"]
+        days = opt["days"]
+        emoji = opt["emoji"]
+
+        if custom_durations and key in custom_durations:
+            price = max(1, int(custom_durations[key]))
+        elif key in tier_defaults:
+            price = max(1, int(tier_defaults[key]))
+        else:
+            if key == "1d":
+                price = max(9, round(base_price * 0.20))
+            elif key == "7d":
+                price = max(29, round(base_price * 0.45))
+            elif key == "15d":
+                price = max(49, round(base_price * 0.70))
+            elif key == "30d":
+                price = base_price
+            elif key == "365d":
+                price = max(199, round(base_price * 4.5))
+            elif key == "lifetime":
+                price = max(399, round(base_price * 8.0))
+            else:
+                price = base_price
+
+        durations_list.append({
+            "key": key,
+            "label": label,
+            "days": days,
+            "price": price,
+            "emoji": emoji,
+            "display": f"{emoji} {label} — ₹{price}",
+        })
+    return durations_list
+
+
+def get_plan_duration_info(plan_or_id: str | dict, duration_key: str) -> dict:
+    durations = get_plan_durations(plan_or_id)
+    duration_key = str(duration_key or "").strip().lower()
+    for d in durations:
+        if d["key"] == duration_key:
+            return d
+    for d in durations:
+        if d["key"] == "30d":
+            return d
+    return durations[0] if durations else {
+        "key": "30d",
+        "label": "30 Days",
+        "days": 30,
+        "price": 99,
+        "emoji": "⭐",
+        "display": "⭐ 30 Days — ₹99",
+    }
+
+
 def save_plan(plan_data: dict):
     plan_id = str(plan_data.get("id", "")).strip().lower()
     if not plan_id:
         raise ValueError("Plan ID cannot be empty")
     with _PLAN_LOCK:
         plans = get_all_plans()
+        durations = plan_data.get("durations")
+        if not isinstance(durations, dict):
+            durations = DEFAULT_TIER_DURATIONS.get(plan_id, {})
         plans[plan_id] = {
             "id": plan_id,
             "name": str(plan_data.get("name") or plan_id.capitalize()),
             "price": max(1, int(plan_data.get("price", 99))),
             "duration_days": max(1, int(plan_data.get("duration_days", 30))),
+            "durations": durations,
             "batch_limit": max(1, int(plan_data.get("batch_limit", 50))),
             "task_limit": max(1, int(plan_data.get("task_limit", 3))),
             "storage_modes": str(plan_data.get("storage_modes") or "telegram,personal_bot"),

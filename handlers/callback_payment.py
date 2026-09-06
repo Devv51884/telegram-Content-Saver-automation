@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import os
 from runtime_context import is_admin, OWNER_ID, LOG_CHANNEL
-from features.plan_manager import get_active_plans, get_plan_by_id, get_payment_config
+from features.plan_manager import (
+    get_active_plans,
+    get_plan_by_id,
+    get_plan_durations,
+    get_payment_config,
+)
 from features.payment_manager import (
     create_order,
     get_order,
@@ -13,8 +18,17 @@ from features.payment_manager import (
 from services.qr_service import create_order_qr
 from services.plan_activation_service import activate_user_plan
 from features.paytm_service import check_paytm_order_status
-from keyboards import buy_plans_markup, order_payment_markup, admin_payment_approval_markup
-from texts import buy_plans_text, order_payment_text
+from keyboards import (
+    buy_plans_markup,
+    plan_durations_markup,
+    order_payment_markup,
+    admin_payment_approval_markup,
+)
+from texts import (
+    buy_plans_text,
+    plan_duration_selection_text,
+    order_payment_text,
+)
 from storage import get_user_state, set_user_state, clear_user_state
 
 
@@ -39,20 +53,56 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
         await callback_query.answer()
         return True
 
-    if data.startswith("buy_select:"):
+    if data.startswith("buy_plan:") or data.startswith("buy_select:"):
         plan_id = data.split(":", 1)[1].strip()
         plan = get_plan_by_id(plan_id)
         if not plan:
             await callback_query.answer("❌ Plan nahi mila.", show_alert=True)
             return True
 
-        order = create_order(user_id, plan_id)
-        qr_file_path, upi_uri, deep_links = create_order_qr(order)
+        durations = get_plan_durations(plan)
+        text = plan_duration_selection_text(plan, durations)
+        markup = plan_durations_markup(plan_id, durations)
+
+        try:
+            await callback_query.message.edit_text(
+                text,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await callback_query.message.reply_text(
+                    text,
+                    reply_markup=markup,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+
+        await callback_query.answer()
+        return True
+
+    if data.startswith("buy_dur:"):
+        parts = data.split(":")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid selection.", show_alert=True)
+            return True
+        plan_id = parts[1].strip()
+        dur_key = parts[2].strip()
+
+        plan = get_plan_by_id(plan_id)
+        if not plan:
+            await callback_query.answer("❌ Plan nahi mila.", show_alert=True)
+            return True
+
+        order = create_order(user_id, plan_id, duration_key=dur_key)
+        qr_file_path, upi_uri, _ = create_order_qr(order)
         cfg = get_payment_config()
-        upi_id = cfg.get("upi_id") or "UPI"
+        upi_id = cfg.get("upi_id") or "nope728@ptyes"
 
         caption = order_payment_text(order, upi_id)
-        markup = order_payment_markup(order["order_id"], deep_links)
+        markup = order_payment_markup(order["order_id"])
 
         try:
             await callback_query.message.delete()
