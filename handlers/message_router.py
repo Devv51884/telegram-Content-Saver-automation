@@ -6,6 +6,8 @@ from services.storage_service import *
 from services.task_service import *
 from services.queue_task_service import *
 from services.batch_transfer_service import *
+from handlers.message_state_flow import handle_message_state_and_profile
+from handlers.message_commands import handle_message_commands
 
 
 async def handle_private_message(client, message):

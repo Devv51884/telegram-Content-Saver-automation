@@ -7,6 +7,11 @@ from services.task_service import *
 
 
 from handlers.callback_payment import handle_payment_callbacks
+from handlers.callback_admin import handle_admin_callbacks
+from handlers.callback_batch import handle_batch_task_callbacks
+from handlers.callback_storage import handle_storage_callbacks
+from handlers.callback_profile import handle_profile_callbacks
+from handlers.callback_settings import handle_settings_callbacks
 
 
 async def _safe_answer(callback_query, text: str = "", *, show_alert: bool = False):

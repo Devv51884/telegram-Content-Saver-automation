@@ -24,7 +24,12 @@ async def all_callbacks(client, callback_query):
     except Exception as exc:
         if "QUERY_ID_INVALID" in str(exc):
             return
-        raise
+        import traceback
+        traceback.print_exc()
+        try:
+            await callback_query.answer("⚠️ Action failed. Please try again.", show_alert=True)
+        except Exception:
+            pass
 
 
 _CALLBACK_HANDLERS_REGISTERED = False
