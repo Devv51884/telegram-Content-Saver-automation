@@ -1,18 +1,68 @@
-from __future__ import annotations
-
+import os
+import re
+from config import DATA_DIR
 from runtime_context import *
 from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
-from features.payment_manager import submit_order_utr, get_order
+from features.payment_manager import submit_order_utr, get_order, attach_order_screenshot
 from features.plan_manager import (
     save_plan,
     update_plan_price,
     update_plan_limits,
+    update_plan_duration_price,
     save_payment_config,
     get_payment_config,
+    set_custom_qr,
+    get_plan_by_id,
+    get_plan_duration_info,
 )
 from keyboards import admin_payment_approval_markup
+
+
+async def _send_admin_payment_notification(client, order_id: str, utr: str, user_id: int, order: dict, screenshot_file_id: str = ""):
+    admin_card = (
+        f"🔔 **New Payment Verification Request!**\n\n"
+        f"🆔 **Order:** `#{order_id}`\n"
+        f"👤 **User:** `{user_id}`\n"
+        f"📦 **Plan:** `{order.get('plan_name')}`\n"
+        f"💰 **Amount:** `₹{order.get('amount')}`\n"
+        f"🧾 **UTR:** `{utr}`\n"
+        f"📸 **Screenshot:** {'Attached ✅' if screenshot_file_id else 'None ❌'}\n"
+        f"⏱️ **Time:** Just now\n\n"
+        f"Verify karke neeche button dabayein:"
+    )
+    admin_markup = admin_payment_approval_markup(order_id, has_screenshot=bool(screenshot_file_id))
+
+    targets = [t for t in [OWNER_ID, LOG_CHANNEL] if t]
+    seen = set()
+    for target in targets:
+        if target in seen:
+            continue
+        seen.add(target)
+        try:
+            if screenshot_file_id:
+                await client.send_photo(
+                    chat_id=target,
+                    photo=screenshot_file_id,
+                    caption=admin_card,
+                    reply_markup=admin_markup,
+                )
+            else:
+                await client.send_message(
+                    chat_id=target,
+                    text=admin_card,
+                    reply_markup=admin_markup,
+                )
+        except Exception:
+            try:
+                await client.send_message(
+                    chat_id=target,
+                    text=admin_card,
+                    reply_markup=admin_markup,
+                )
+            except Exception:
+                pass
 
 
 async def handle_message_state_and_profile(client, message, user_id: int, text_raw: str, text: str, lowered: str, state: str):
@@ -144,8 +194,77 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
     if state and not lowered.startswith("/cancel"):
         if state.startswith("AWAITING_PAYMENT_UTR:"):
             order_id = state.split(":", 1)[1]
-            utr = text.strip()
+            photo = getattr(message, "photo", None)
+            doc = getattr(message, "document", None)
+            file_id = ""
+
+            if photo:
+                file_id = photo[-1].file_id
+            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
+                file_id = doc.file_id
+
+            # Case 1: User sent photo WITH or WITHOUT caption
+            if file_id:
+                match = re.search(r"\b(\d{12})\b", text_raw)
+                if match:
+                    utr = match.group(1)
+                    ok, response_msg = submit_order_utr(order_id, utr, screenshot_file_id=file_id)
+                    if not ok:
+                        await message.reply_text(f"{response_msg}\n\nDobara bhejien ya /cancel karein.")
+                        return True
+
+                    clear_user_state(user_id)
+                    order = get_order(order_id) or {}
+                    await message.reply_text(
+                        f"✅ **Payment Screenshot & UTR (#{utr}) Received!**\n\n"
+                        f"Aapka payment proof submit ho gaya hai. Admin dwara verify hote hi **{order.get('plan_name', 'Plan')}** activate ho jayega."
+                    )
+                    await _send_admin_payment_notification(client, order_id, utr, user_id, order, screenshot_file_id=file_id)
+                    return True
+                else:
+                    set_user_state(user_id, f"AWAITING_UTR_FOR_PHOTO:{order_id}:{file_id}")
+                    await message.reply_text(
+                        "📸 **Payment Screenshot Received!**\n\n"
+                        "Ab kripya is payment ka **12-digit UPI Reference / UTR Number** chat me type karke send karein taaki hum verify kar sakein.\n\n"
+                        "*(GPay, PhonePe ya Paytm receipt par 'UPI Ref No.' ya 'UTR' 12 digits ka hota hai)*"
+                    )
+                    return True
+
+            # Case 2: User sent text only
+            match = re.search(r"\b(\d{12})\b", text)
+            if not match:
+                await message.reply_text("❌ Sahi 12-digit UTR number bhejein (e.g. 424212345678), ya payment ka screenshot (photo) send karein.")
+                return True
+
+            utr = match.group(1)
             ok, response_msg = submit_order_utr(order_id, utr)
+            if not ok:
+                await message.reply_text(f"{response_msg}\n\nDobara sahi 12-digit UTR bhejo ya /cancel karo.")
+                return True
+
+            set_user_state(user_id, f"OPTIONAL_SCREENSHOT:{order_id}")
+            order = get_order(order_id) or {}
+            await message.reply_text(
+                f"✅ **UTR Received (#{utr})!**\n\n"
+                f"Aapka UTR submit ho gaya hai.\n\n"
+                f"📸 *Tip: Verification fast karne ke liye aap abhi payment receipt ka photo/screenshot bhi bhej sakte hain (Optional).*\n\n"
+                f"Ya seedha verification ka intezar karein."
+            )
+            await _send_admin_payment_notification(client, order_id, utr, user_id, order)
+            return True
+
+        if state.startswith("AWAITING_UTR_FOR_PHOTO:"):
+            parts = state.split(":", 2)
+            order_id = parts[1]
+            file_id = parts[2] if len(parts) > 2 else ""
+
+            match = re.search(r"\b(\d{12})\b", text)
+            if not match:
+                await message.reply_text("❌ Sahi 12-digit UTR number bhejein (e.g. 424212345678).")
+                return True
+
+            utr = match.group(1)
+            ok, response_msg = submit_order_utr(order_id, utr, screenshot_file_id=file_id)
             if not ok:
                 await message.reply_text(f"{response_msg}\n\nDobara sahi 12-digit UTR bhejo ya /cancel karo.")
                 return True
@@ -153,31 +272,115 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
             clear_user_state(user_id)
             order = get_order(order_id) or {}
             await message.reply_text(
-                f"✅ **UTR Received (#{utr})**\n\n"
-                f"Aapka UTR submit ho gaya hai. Verification hote hi aapka **{order.get('plan_name', 'Plan')}** activate ho jayega."
+                f"✅ **UTR Received (#{utr}) & Screenshot Attached!**\n\n"
+                f"Aapka verification proof admin ko bhej diya gaya hai. Verification hote hi aapka **{order.get('plan_name', 'Plan')}** activate ho jayega."
             )
+            await _send_admin_payment_notification(client, order_id, utr, user_id, order, screenshot_file_id=file_id)
+            return True
 
-            admin_card = (
-                f"🔔 **New Payment UTR Submitted!**\n\n"
-                f"🆔 **Order:** `#{order_id}`\n"
-                f"👤 **User:** `{user_id}`\n"
-                f"📦 **Plan:** `{order.get('plan_name')}`\n"
-                f"💰 **Amount:** `₹{order.get('amount')}`\n"
-                f"🧾 **UTR:** `{utr}`\n"
-                f"⏱️ **Time:** Just now\n\n"
-                f"Verify karke neeche button dabayein:"
+        if state.startswith("OPTIONAL_SCREENSHOT:"):
+            order_id = state.split(":", 1)[1]
+            photo = getattr(message, "photo", None)
+            doc = getattr(message, "document", None)
+            file_id = ""
+
+            if photo:
+                file_id = photo[-1].file_id
+            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
+                file_id = doc.file_id
+
+            if file_id:
+                attach_order_screenshot(order_id, file_id)
+                clear_user_state(user_id)
+                order = get_order(order_id) or {}
+                await message.reply_text(
+                    "📸 **Payment Screenshot Attach Ho Gaya Hai!**\n\n"
+                    "Admin ko screenshot bhej diya gaya hai. Jald hi aapka plan activate ho jayega."
+                )
+                admin_markup = admin_payment_approval_markup(order_id, has_screenshot=False)
+                caption = (
+                    f"📸 **Attached Screenshot for Order #{order_id}**\n\n"
+                    f"👤 User: `{user_id}`\n"
+                    f"📦 Plan: `{order.get('plan_name')}`\n"
+                    f"💰 Amount: `₹{order.get('amount')}`\n"
+                    f"🧾 UTR: `{order.get('utr_number')}`\n\n"
+                    f"Verify karke approve karein:"
+                )
+                if OWNER_ID:
+                    try:
+                        await client.send_photo(OWNER_ID, photo=file_id, caption=caption, reply_markup=admin_markup)
+                    except Exception:
+                        pass
+                if LOG_CHANNEL and str(LOG_CHANNEL) != str(OWNER_ID):
+                    try:
+                        await client.send_photo(LOG_CHANNEL, photo=file_id, caption=caption, reply_markup=admin_markup)
+                    except Exception:
+                        pass
+                return True
+            else:
+                clear_user_state(user_id)
+
+        if state.startswith("ADM_EDIT_DUR_PRICE:"):
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            parts = state.split(":")
+            plan_id = parts[1]
+            dur_key = parts[2]
+            try:
+                price = int(text.strip())
+                if price <= 0:
+                    raise ValueError()
+            except Exception:
+                await message.reply_text("❌ Kripya valid price number bhejein (e.g. 49).")
+                return True
+
+            ok = update_plan_duration_price(plan_id, dur_key, price)
+            clear_user_state(user_id)
+            if ok:
+                plan = get_plan_by_id(plan_id)
+                dur_info = get_plan_duration_info(plan, dur_key)
+                await message.reply_text(
+                    f"✅ **Price Updated!**\n\nPlan: `{plan.get('name')}`\nDuration: `{dur_info['label']}`\nNew Price: `₹{price}`\n\nAb users ko yeh naya price dikhega."
+                )
+            else:
+                await message.reply_text("❌ Price update fail hua. Plan nahi mila.")
+            return True
+
+        if state == "ADM_UPLOAD_CUSTOM_QR":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+
+            photo = getattr(message, "photo", None)
+            doc = getattr(message, "document", None)
+            file_id = ""
+
+            if photo:
+                file_id = photo[-1].file_id
+            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
+                file_id = doc.file_id
+
+            if not file_id:
+                await message.reply_text("❌ Kripya ek QR code image/photo send karein, ya /cancel karein.")
+                return True
+
+            save_dir = os.path.join(DATA_DIR, "qr")
+            os.makedirs(save_dir, exist_ok=True)
+            local_path = os.path.join(save_dir, "custom_qr.png")
+
+            try:
+                await message.download(file_name=local_path)
+            except Exception:
+                pass
+
+            set_custom_qr(file_id=file_id, file_path=local_path if os.path.exists(local_path) else "")
+            clear_user_state(user_id)
+            await message.reply_text(
+                "✅ **Custom QR Code Successfully Saved!**\n\n"
+                "Ab users jab bhi kisi plan/duration ko select karenge, unhe payment ke liye yeh uploaded QR code dikhega.\n\n"
+                "Aap `/admin` -> **Payment Gateway** me jaakar isko dekh ya remove kar sakte hain."
             )
-            admin_markup = admin_payment_approval_markup(order_id)
-            if OWNER_ID:
-                try:
-                    await client.send_message(OWNER_ID, admin_card, reply_markup=admin_markup)
-                except Exception:
-                    pass
-            if LOG_CHANNEL and str(LOG_CHANNEL) != str(OWNER_ID):
-                try:
-                    await client.send_message(LOG_CHANNEL, admin_card, reply_markup=admin_markup)
-                except Exception:
-                    pass
             return True
 
         if state == "ADM_ADD_PLAN":

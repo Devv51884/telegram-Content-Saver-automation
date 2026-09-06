@@ -107,7 +107,7 @@ def cancel_order(order_id: str) -> bool:
         return False
 
 
-def submit_order_utr(order_id: str, utr: str) -> tuple[bool, str]:
+def submit_order_utr(order_id: str, utr: str, screenshot_file_id: str = "") -> tuple[bool, str]:
     utr = str(utr or "").strip()
     if not re.match(r"^\d{12}$", utr):
         return False, "❌ UTR number 12 digits ka hona chahiye (e.g. 424212345678)."
@@ -133,9 +133,22 @@ def submit_order_utr(order_id: str, utr: str) -> tuple[bool, str]:
 
         order["utr_number"] = utr
         order["utr_submitted_at"] = now
+        if screenshot_file_id:
+            order["screenshot_file_id"] = str(screenshot_file_id).strip()
         _save_orders(orders)
 
     return True, "✅ UTR successfully submit ho gaya hai."
+
+
+def attach_order_screenshot(order_id: str, screenshot_file_id: str) -> bool:
+    with _ORDER_LOCK:
+        orders = _load_orders()
+        order = orders.get(order_id)
+        if not order:
+            return False
+        order["screenshot_file_id"] = str(screenshot_file_id).strip()
+        _save_orders(orders)
+        return True
 
 
 def mark_order_paid(order_id: str, verified_via: str = "paytm_auto", utr: str = "") -> dict | None:

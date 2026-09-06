@@ -182,8 +182,9 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
             chat_id=user_id,
             text=(
                 f"🧾 **Order #{order_id} (₹{order.get('amount')})**\n\n"
-                f"Kripya apna 12-digit UPI Reference / UTR Number yahan chat me type karke send karein.\n\n"
-                f"*(GPay, PhonePe ya Paytm receipt par 'UPI Ref No.' ya 'UTR' likha hota hai)*"
+                f"Kripya apna **12-digit UPI Reference / UTR Number** chat me type karke send karein, YA payment ki receipt/screenshot photo yahan send karein!\n\n"
+                f"💡 *Aap photo ke caption me bhi 12-digit UTR number likh sakte hain.*\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
             ),
         )
         return True
@@ -212,14 +213,28 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
 
         ok, msg = await activate_user_plan(client, order_id, verified_via=f"admin_{user_id}", utr=order.get("utr_number", ""))
         if ok:
-            await callback_query.answer(f"✅ Approved! Plan activated.", show_alert=True)
+            await callback_query.answer("✅ Approved! Plan activated.", show_alert=True)
+            appr_text = (
+                f"✅ **Order #{order_id} Approved!**\n\n"
+                f"User: `{order.get('user_id')}`\n"
+                f"Plan: `{order.get('plan_name')}`\n"
+                f"Amount: `₹{order.get('amount')}`\n"
+                f"UTR: `{order.get('utr_number') or 'None'}`\n"
+                f"Approved by: `{user_id}`"
+            )
             try:
-                await callback_query.message.edit_text(
-                    f"✅ **Order #{order_id} Approved!**\n\nUser: `{order.get('user_id')}`\nPlan: `{order.get('plan_name')}`\nAmount: `₹{order.get('amount')}`\nUTR: `{order.get('utr_number')}`\nApproved by: `{user_id}`",
+                await callback_query.message.edit_caption(
+                    caption=appr_text,
                     reply_markup=None,
                 )
             except Exception:
-                pass
+                try:
+                    await callback_query.message.edit_text(
+                        appr_text,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass
         else:
             await callback_query.answer(f"Error: {msg}", show_alert=True)
         return True
@@ -240,13 +255,20 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
                 )
             except Exception:
                 pass
+            rej_text = f"❌ **Order #{order_id} Rejected.**\nUser: `{target_user}`\nRejected by: `{user_id}`"
             try:
-                await callback_query.message.edit_text(
-                    f"❌ **Order #{order_id} Rejected.**\nUser: `{target_user}`\nRejected by: `{user_id}`",
+                await callback_query.message.edit_caption(
+                    caption=rej_text,
                     reply_markup=None,
                 )
             except Exception:
-                pass
+                try:
+                    await callback_query.message.edit_text(
+                        rej_text,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass
         await callback_query.answer("Order rejected.")
         return True
 

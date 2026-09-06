@@ -41,13 +41,22 @@ def generate_qr_image(upi_uri: str, order_id: str) -> str:
 
 def create_order_qr(order: dict) -> tuple[str, str, dict]:
     cfg = get_payment_config()
-    upi_id = cfg.get("upi_id") or "someone@upi"
+    upi_id = cfg.get("upi_id") or "nope728@ptyes"
     payee_name = cfg.get("payee_name") or "Code Devil Premium"
     amount = float(order.get("amount", 99))
     order_id = str(order.get("order_id", ""))
 
     upi_uri = build_upi_uri(upi_id, payee_name, amount, order_id)
-    qr_file_path = generate_qr_image(upi_uri, order_id)
+
+    custom_qr_path = cfg.get("custom_qr_path")
+    custom_qr_file_id = cfg.get("custom_qr_file_id")
+
+    if custom_qr_path and os.path.exists(custom_qr_path):
+        qr_file_path = custom_qr_path
+    elif custom_qr_file_id:
+        qr_file_path = custom_qr_file_id
+    else:
+        qr_file_path = generate_qr_image(upi_uri, order_id)
 
     deep_links = {
         "upi": upi_uri,

@@ -750,13 +750,16 @@ def order_payment_markup(order_id: str, deep_links: dict | None = None):
     ])
 
 
-def admin_payment_approval_markup(order_id: str):
-    return InlineKeyboardMarkup([
+def admin_payment_approval_markup(order_id: str, has_screenshot: bool = False):
+    rows = [
         [
             InlineKeyboardButton("✅ Approve & Activate", callback_data=f"adm_approve_pay:{order_id}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"adm_reject_pay:{order_id}"),
         ]
-    ])
+    ]
+    if has_screenshot:
+        rows.append([InlineKeyboardButton("🖼️ View Payment Screenshot", callback_data=f"adm_view_screenshot:{order_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def admin_plans_list_markup(plans: dict):
@@ -767,7 +770,7 @@ def admin_plans_list_markup(plans: dict):
         name = p.get("name", p_id)
         price = p.get("price", 0)
         days = p.get("duration_days", 30)
-        btn_text = f"{status_icon} {name} (₹{price} / {days}d)"
+        btn_text = f"{status_icon} {name} (From ₹{price})"
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"adm_plan_detail:{p_id}")])
 
     rows.append([
@@ -785,26 +788,65 @@ def admin_plan_action_markup(plan_id: str, is_active: bool):
     toggle_text = "🔴 Disable Plan" if is_active else "🟢 Enable Plan"
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("⏱️ Duration Prices", callback_data=f"adm_plan_durations:{plan_id}"),
             InlineKeyboardButton(toggle_text, callback_data=f"adm_toggle_plan:{plan_id}"),
-            InlineKeyboardButton("✏️ Edit Price", callback_data=f"adm_edit_price_start:{plan_id}"),
         ],
         [
+            InlineKeyboardButton("✏️ Edit Base Price", callback_data=f"adm_edit_price_start:{plan_id}"),
             InlineKeyboardButton("⚙️ Edit Limits & Days", callback_data=f"adm_edit_limits_start:{plan_id}"),
-            InlineKeyboardButton("🗑 Delete Plan", callback_data=f"adm_delete_plan:{plan_id}"),
         ],
         [
+            InlineKeyboardButton("🗑 Delete Plan", callback_data=f"adm_delete_plan:{plan_id}"),
             InlineKeyboardButton("⬅️ Back to Plans", callback_data="admin_manage_plans"),
+        ],
+        [
             InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
         ],
     ])
 
 
+def admin_plan_durations_markup(plan_id: str, durations: list[dict]):
+    rows = []
+    row = []
+    for dur in durations:
+        btn_text = f"{dur['emoji']} {dur['label']} (₹{dur['price']})"
+        btn = InlineKeyboardButton(btn_text, callback_data=f"adm_edit_dur_price:{plan_id}:{dur['key']}")
+        row.append(btn)
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([
+        InlineKeyboardButton("⬅️ Back to Plan", callback_data=f"adm_plan_detail:{plan_id}"),
+        InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 def admin_payment_gateway_markup():
-    return InlineKeyboardMarkup([
+    from features.plan_manager import get_payment_config
+    cfg = get_payment_config()
+    has_custom_qr = bool(cfg.get("custom_qr_file_id") or cfg.get("custom_qr_path"))
+
+    qr_buttons = [InlineKeyboardButton("🖼️ Upload Custom QR Code", callback_data="adm_upload_qr_start")]
+    if has_custom_qr:
+        qr_buttons.append(InlineKeyboardButton("👁️ View QR", callback_data="adm_view_custom_qr"))
+        qr_buttons_extra = [InlineKeyboardButton("🗑️ Remove Custom QR (Use Auto QR)", callback_data="adm_remove_custom_qr")]
+    else:
+        qr_buttons_extra = []
+
+    rows = [
         [
             InlineKeyboardButton("⚡ Setup Paytm MID & Key", callback_data="adm_set_paytm_start"),
             InlineKeyboardButton("🏦 Setup UPI ID", callback_data="adm_set_upi_start"),
         ],
+        qr_buttons,
+    ]
+    if qr_buttons_extra:
+        rows.append(qr_buttons_extra)
+
+    rows.extend([
         [
             InlineKeyboardButton("🧪 Test Paytm Gateway API", callback_data="adm_test_paytm"),
             InlineKeyboardButton("📋 View Pending Orders", callback_data="admin_pending_orders"),
@@ -814,6 +856,7 @@ def admin_payment_gateway_markup():
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
         ],
     ])
+    return InlineKeyboardMarkup(rows)
 
 
 def admin_pending_orders_markup(orders: list):
@@ -824,7 +867,8 @@ def admin_pending_orders_markup(orders: list):
         amt = o.get("amount")
         utr = o.get("utr_number")
         utr_tag = f"UTR: {utr[-4:]}" if utr else "No UTR"
-        btn_text = f"⏳ #{order_id} | ₹{amt} | {utr_tag}"
+        has_ss = "📸 " if o.get("screenshot_file_id") else ""
+        btn_text = f"⏳ {has_ss}#{order_id} | ₹{amt} | {utr_tag}"
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"adm_view_order:{order_id}")])
 
     rows.append([
@@ -834,15 +878,18 @@ def admin_pending_orders_markup(orders: list):
     return InlineKeyboardMarkup(rows)
 
 
-def admin_order_detail_markup(order_id: str):
-    return InlineKeyboardMarkup([
+def admin_order_detail_markup(order_id: str, has_screenshot: bool = False):
+    rows = [
         [
             InlineKeyboardButton("✅ Approve & Activate", callback_data=f"adm_approve_pay:{order_id}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"adm_reject_pay:{order_id}"),
         ],
-        [
-            InlineKeyboardButton("⬅️ Back to Orders", callback_data="admin_pending_orders"),
-            InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
-        ],
+    ]
+    if has_screenshot:
+        rows.append([InlineKeyboardButton("🖼️ View Payment Screenshot", callback_data=f"adm_view_screenshot:{order_id}")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back to Orders", callback_data="admin_pending_orders"),
+        InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
     ])
+    return InlineKeyboardMarkup(rows)
 

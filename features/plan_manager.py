@@ -300,6 +300,30 @@ def update_plan_price(plan_id: str, new_price: int) -> bool:
         return True
 
 
+def update_plan_duration_price(plan_id: str, duration_key: str, price: int) -> bool:
+    plan_id = str(plan_id).strip().lower()
+    duration_key = str(duration_key).strip().lower()
+    new_price = max(1, int(price))
+
+    with _PLAN_LOCK:
+        plans = get_all_plans()
+        if plan_id not in plans:
+            return False
+
+        durations = plans[plan_id].get("durations")
+        if not isinstance(durations, dict):
+            durations = dict(DEFAULT_TIER_DURATIONS.get(plan_id, {}))
+
+        durations[duration_key] = new_price
+        plans[plan_id]["durations"] = durations
+
+        if duration_key == "30d":
+            plans[plan_id]["price"] = new_price
+
+        _save_json(PLANS_FILE, plans)
+        return True
+
+
 def update_plan_limits(plan_id: str, batch_limit: int, task_limit: int, duration_days: int) -> bool:
     plan_id = str(plan_id).strip().lower()
     with _PLAN_LOCK:
@@ -330,10 +354,21 @@ def get_payment_config() -> dict:
             "payee_name": str(cfg.get("payee_name") or ADMIN_UPI_NAME or "Code Devil Premium").strip(),
             "paytm_mid": str(cfg.get("paytm_mid") or os.environ.get("PAYTM_MID", "")).strip(),
             "paytm_key": str(cfg.get("paytm_key") or os.environ.get("PAYTM_MERCHANT_KEY", "")).strip(),
+            "custom_qr_file_id": str(cfg.get("custom_qr_file_id") or "").strip(),
+            "custom_qr_path": str(cfg.get("custom_qr_path") or "").strip(),
+            "qr_mode": str(cfg.get("qr_mode") or "auto").strip(),
         }
 
 
-def save_payment_config(upi_id: str = "", payee_name: str = "", paytm_mid: str = "", paytm_key: str = ""):
+def save_payment_config(
+    upi_id: str = "",
+    payee_name: str = "",
+    paytm_mid: str = "",
+    paytm_key: str = "",
+    custom_qr_file_id: str = "",
+    custom_qr_path: str = "",
+    qr_mode: str = "",
+):
     with _PLAN_LOCK:
         cfg = _load_json(PAYMENT_CONFIG_FILE, {})
         if upi_id:
@@ -344,5 +379,33 @@ def save_payment_config(upi_id: str = "", payee_name: str = "", paytm_mid: str =
             cfg["paytm_mid"] = str(paytm_mid).strip()
         if paytm_key:
             cfg["paytm_key"] = str(paytm_key).strip()
+        if custom_qr_file_id:
+            cfg["custom_qr_file_id"] = str(custom_qr_file_id).strip()
+        if custom_qr_path:
+            cfg["custom_qr_path"] = str(custom_qr_path).strip()
+        if qr_mode:
+            cfg["qr_mode"] = str(qr_mode).strip()
+        _save_json(PAYMENT_CONFIG_FILE, cfg)
+        return cfg
+
+
+def set_custom_qr(file_id: str = "", file_path: str = ""):
+    with _PLAN_LOCK:
+        cfg = _load_json(PAYMENT_CONFIG_FILE, {})
+        if file_id:
+            cfg["custom_qr_file_id"] = str(file_id).strip()
+        if file_path:
+            cfg["custom_qr_path"] = str(file_path).strip()
+        cfg["qr_mode"] = "custom"
+        _save_json(PAYMENT_CONFIG_FILE, cfg)
+        return cfg
+
+
+def remove_custom_qr():
+    with _PLAN_LOCK:
+        cfg = _load_json(PAYMENT_CONFIG_FILE, {})
+        cfg["custom_qr_file_id"] = ""
+        cfg["custom_qr_path"] = ""
+        cfg["qr_mode"] = "auto"
         _save_json(PAYMENT_CONFIG_FILE, cfg)
         return cfg

@@ -315,25 +315,46 @@ def admin_manage_plans_text(plans: dict):
 
 
 def admin_plan_detail_text(plan: dict):
+    from features.plan_manager import get_plan_durations
     features = plan.get("features", [])
     features_str = "\n".join([f"  • {f}" for f in features]) if features else "  • No custom features"
     status_str = "🟢 Active" if plan.get("is_active", True) else "🔴 Disabled"
+    durs = get_plan_durations(plan)
+    dur_lines = " | ".join([f"{d['key']}: ₹{d['price']}" for d in durs])
 
     return (
         f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
         f"  💎 **PLAN: {plan.get('name', '').upper()}**\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"🆔 **Plan ID:** `{plan.get('id')}`\n"
-        f"💰 **Price:** `₹{plan.get('price')}`\n"
-        f"⏳ **Validity:** `{plan.get('duration_days')} Days`\n"
+        f"💰 **Base Price:** `₹{plan.get('price')}` (30d)\n"
+        f"⏱️ **Duration Prices:**\n`{dur_lines}`\n\n"
         f"📦 **Batch Limit:** `{plan.get('batch_limit')} Links`\n"
         f"⚡ **Parallel Tasks:** `{plan.get('task_limit')} Tasks`\n"
         f"☁️ **Storage Modes:** `{plan.get('storage_modes')}`\n"
         f"🔘 **Current Status:** {status_str}\n\n"
         f"**Plan Features:**\n{features_str}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 *Neeche diye buttons se is plan ko edit ya toggle karein:*"
+        f"👇 *Neeche diye buttons se duration prices, limits ya status edit karein:*"
     )
+
+
+def admin_plan_durations_text(plan: dict, durations: list[dict]):
+    p_name = plan.get("name", "Plan")
+    lines = [
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        f"  ⏱️ **DURATION PRICING: {p_name.upper()}**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        "Neeche is plan ke alag-alag durations ke active prices hain:",
+        "",
+    ]
+    for d in durations:
+        lines.append(f"  • {d['emoji']} **{d['label']} ({d['days']} Days):** `₹{d['price']}`")
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("👇 *Kisi bhi duration ka price badalne ke liye button par click karein:*")
+    return "\n".join(lines)
 
 
 def admin_payment_gateway_text():
@@ -341,6 +362,8 @@ def admin_payment_gateway_text():
     cfg = get_payment_config()
     paytm_ready = bool(cfg.get("paytm_mid") and cfg.get("paytm_key"))
     paytm_label = f"🟢 Connected (`{cfg.get('paytm_mid')}`)" if paytm_ready else "⚪ Disconnected (Using UPI Manual mode)"
+    custom_qr_ready = bool(cfg.get("custom_qr_file_id") or cfg.get("custom_qr_path"))
+    qr_mode_label = "🖼️ Custom Uploaded QR (Active) ✅" if custom_qr_ready else "⚡ Auto Dynamic QR (Active)"
 
     return (
         "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
@@ -352,13 +375,13 @@ def admin_payment_gateway_text():
         "🏦 **UPI Settings (For QR Code):**\n"
         f"  • UPI ID: `{cfg.get('upi_id') or 'Not Set'}`\n"
         f"  • Payee Name: `{cfg.get('payee_name') or 'Code Devil'}`\n\n"
+        "🖼️ **Manual QR Code Mode:**\n"
+        f"  • Current QR Mode: **{qr_mode_label}**\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📌 **Paytm Credentials Kaise Milegi?**\n"
-        "1. business.paytm.com par account banayein.\n"
-        "2. Left menu me **Developer Settings -> API Keys** par jayein.\n"
-        "3. Wahan se **Merchant ID (MID)** aur **Merchant Key** copy karein.\n"
-        "4. Neeche **'⚡ Setup Paytm MID & Key'** button dabayein ya command bhejein:\n"
-        "   `/set_paytm YOUR_MID YOUR_KEY`"
+        "📌 **Custom QR Code Kaise Kaam Karta Hai?**\n"
+        "• Aap apna Paytm/PhonePe/GPay QR code photo upload kar sakte hain.\n"
+        "• User jab payment karega toh use aapka uploaded QR code dikhayi dega.\n"
+        "• Agar custom QR upload nahi hoga, toh bot automatically amount-based dynamic QR banayega."
     )
 
 

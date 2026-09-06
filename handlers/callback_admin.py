@@ -8,15 +8,33 @@ from services.task_service import *
 from features.plan_manager import (
     get_all_plans,
     get_plan_by_id,
+    get_plan_durations,
+    get_plan_duration_info,
     save_plan,
     delete_plan,
     toggle_plan_status,
     reset_default_plans,
     get_payment_config,
     save_payment_config,
+    remove_custom_qr,
 )
 from features.payment_manager import get_pending_orders, get_order
 from features.paytm_service import check_paytm_order_status
+from keyboards import (
+    admin_plan_durations_markup,
+    admin_order_detail_markup,
+    admin_payment_approval_markup,
+    admin_payment_gateway_markup,
+    admin_plans_list_markup,
+    admin_plan_action_markup,
+    admin_pending_orders_markup,
+)
+from texts import (
+    admin_plan_durations_text,
+    admin_plan_detail_text,
+    admin_manage_plans_text,
+    admin_payment_gateway_text,
+)
 from storage import set_user_state
 
 
@@ -230,6 +248,49 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         )
         return True
 
+    # 12b. Plan Duration Pricing Dashboard
+    if data.startswith("adm_plan_durations:"):
+        plan_id = data.split(":", 1)[1].strip()
+        plan = get_plan_by_id(plan_id)
+        if not plan:
+            await callback_query.answer("Plan nahi mila.", show_alert=True)
+            return True
+        durations = get_plan_durations(plan)
+        try:
+            await callback_query.message.edit_text(
+                admin_plan_durations_text(plan, durations),
+                reply_markup=admin_plan_durations_markup(plan_id, durations),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 12c. Edit Specific Duration Price
+    if data.startswith("adm_edit_dur_price:"):
+        parts = data.split(":")
+        plan_id = parts[1].strip()
+        dur_key = parts[2].strip()
+        plan = get_plan_by_id(plan_id)
+        if not plan:
+            await callback_query.answer("Plan nahi mila.", show_alert=True)
+            return True
+        dur_info = get_plan_duration_info(plan, dur_key)
+        set_user_state(user_id, f"ADM_EDIT_DUR_PRICE:{plan_id}:{dur_key}")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                f"✏️ **Edit Price for `{plan.get('name')}` — {dur_info['label']} ({dur_info['days']} Days)**\n\n"
+                f"Current Price: `₹{dur_info['price']}`\n\n"
+                f"Naya price (in ₹ Rupees) chat me bhejein (sirf number):\n"
+                f"*Example:* `49`\n\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
     # 13. Payment Gateway Dashboard
     if data == "admin_payment_settings":
         try:
@@ -297,6 +358,53 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         )
         return True
 
+    # 15b. Upload Custom QR Photo
+    if data == "adm_upload_qr_start":
+        set_user_state(user_id, "ADM_UPLOAD_CUSTOM_QR")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "🖼️ **Upload Custom UPI QR Code**\n\n"
+                "Apne Paytm, PhonePe ya Google Pay ka QR Code photo (image) yahan chat me send karein.\n\n"
+                "*(Yeh QR code users ko /buy me checkout karte waqt dikhaya jayega)*\n"
+                "*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 15c. View Current Custom QR Photo
+    if data == "adm_view_custom_qr":
+        cfg = get_payment_config()
+        file_id = cfg.get("custom_qr_file_id")
+        file_path = cfg.get("custom_qr_path")
+        target_photo = file_id or (file_path if file_path and os.path.exists(file_path) else None)
+        if not target_photo:
+            await callback_query.answer("Koi custom QR upload nahi hai.", show_alert=True)
+            return True
+        await callback_query.answer()
+        try:
+            await client.send_photo(
+                chat_id=user_id,
+                photo=target_photo,
+                caption=f"🖼️ **Current Active Custom QR Code**\n\nUPI ID: `{cfg.get('upi_id')}`\nPayee: `{cfg.get('payee_name')}`\n\nYeh QR code users ko payment ke time dikhaya ja raha hai.",
+            )
+        except Exception as exc:
+            await client.send_message(user_id, f"Error displaying QR: {exc}")
+        return True
+
+    # 15d. Remove Custom QR Photo
+    if data == "adm_remove_custom_qr":
+        remove_custom_qr()
+        await callback_query.answer("Custom QR hata diya gaya! Ab Auto Dynamic QR use hoga.", show_alert=True)
+        try:
+            text = admin_payment_gateway_text()
+            markup = admin_payment_gateway_markup()
+            await callback_query.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            pass
+        return True
+
     # 16. Test Paytm Gateway Connection
     if data == "adm_test_paytm":
         cfg = get_payment_config()
@@ -347,7 +455,8 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         ]
         for o in orders[:8]:
             utr = o.get("utr_number") or "None"
-            lines.append(f"• `#{o.get('order_id')}` | ₹{o.get('amount')} | Plan: `{o.get('plan_name')}` | UTR: `{utr}`")
+            has_ss = "📸 " if o.get("screenshot_file_id") else ""
+            lines.append(f"• {has_ss}`#{o.get('order_id')}` | ₹{o.get('amount')} | Plan: `{o.get('plan_name')}` | UTR: `{utr}`")
 
         lines.append("")
         lines.append("👉 *Neeche kisi bhi order button par tap karke verify ya approve karein:*")
@@ -370,6 +479,8 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
             await callback_query.answer("Order nahi mila.", show_alert=True)
             return True
         utr_str = f"`{order.get('utr_number')}`" if order.get("utr_number") else "⚠️ *Not submitted yet*"
+        has_screenshot = bool(order.get("screenshot_file_id"))
+        ss_str = "✅ Uploaded (View below)" if has_screenshot else "❌ Not attached"
         card = (
             f"┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
             f"  🧾 **ORDER DETAILS #{order_id}**\n"
@@ -378,18 +489,45 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
             f"💎 **Plan:** `{order.get('plan_name')}`\n"
             f"💰 **Amount:** `₹{order.get('amount')}`\n"
             f"🧾 **UTR:** {utr_str}\n"
+            f"📸 **Screenshot:** {ss_str}\n"
             f"🔘 **Status:** `{order.get('status')}`\n\n"
             f"Approve karne par user ka plan turant real-time me activate ho jayega."
         )
         try:
             await callback_query.message.edit_text(
                 card,
-                reply_markup=admin_order_detail_markup(order_id),
+                reply_markup=admin_order_detail_markup(order_id, has_screenshot=has_screenshot),
                 disable_web_page_preview=True,
             )
         except Exception:
             pass
         await callback_query.answer()
+        return True
+
+    # 18b. View Payment Screenshot
+    if data.startswith("adm_view_screenshot:"):
+        order_id = data.split(":", 1)[1].strip()
+        order = get_order(order_id)
+        if not order or not order.get("screenshot_file_id"):
+            await callback_query.answer("Is order me koi screenshot attach nahi hai.", show_alert=True)
+            return True
+        await callback_query.answer()
+        try:
+            caption = (
+                f"📸 **Payment Screenshot for Order #{order_id}**\n\n"
+                f"👤 User: `{order.get('user_id')}`\n"
+                f"📦 Plan: `{order.get('plan_name')}`\n"
+                f"💰 Amount: `₹{order.get('amount')}`\n"
+                f"🧾 UTR: `{order.get('utr_number') or 'Not provided'}`"
+            )
+            await client.send_photo(
+                chat_id=user_id,
+                photo=order["screenshot_file_id"],
+                caption=caption,
+                reply_markup=admin_payment_approval_markup(order_id, has_screenshot=False),
+            )
+        except Exception as exc:
+            await client.send_message(user_id, f"Error viewing screenshot: {exc}")
         return True
 
     # 19. Premium Help Text
