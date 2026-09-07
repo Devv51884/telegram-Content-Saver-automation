@@ -48,6 +48,7 @@ for _relative_path in (
     "handlers/callback_settings.py",
     "handlers/callback_storage.py",
     "handlers/callback_profile.py",
+    "handlers/callback_payment.py",
     "handlers/callback_router.py",
     "handlers/message_state_flow.py",
     "handlers/message_commands.py",
