@@ -17,6 +17,10 @@ from features.plan_manager import (
     get_payment_config,
     save_payment_config,
     remove_custom_qr,
+    get_all_duration_options,
+    add_duration_option,
+    update_duration_option,
+    delete_duration_option,
 )
 from features.payment_manager import get_pending_orders, get_order
 from features.paytm_service import check_paytm_order_status
@@ -28,7 +32,10 @@ from keyboards import (
     admin_plans_list_markup,
     admin_plan_action_markup,
     admin_pending_orders_markup,
+    admin_durations_crud_markup,
+    admin_broadcast_confirm_markup,
 )
+
 from texts import (
     admin_plan_durations_text,
     admin_plan_detail_text,
@@ -289,6 +296,85 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
                 f"*(Cancel karne ke liye /cancel bhejein)*"
             ),
         )
+        return True
+
+    # 12d. Manage Durations (CRUD Dashboard)
+    if data == "adm_manage_durations":
+        durations = get_all_duration_options()
+        text = (
+            "⏱️ **Plan Duration Settings (CRUD)**\n\n"
+            "Aap yahan se bot ke sabhi plan validity durations ko manage kar sakte hain:\n\n"
+        )
+        for d in durations:
+            text += f"• {d.get('emoji', '⏱️')} **{d['label']}** (`{d['key']}`) — `{d['days']} Din`\n"
+        text += "\n👇 *Neeche diye buttons se duration info edit karein, delete karein ya naya duration add karein:*"
+        try:
+            await callback_query.message.edit_text(
+                text,
+                reply_markup=admin_durations_crud_markup(durations),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await callback_query.answer()
+        return True
+
+    # 12e. Add New Duration Start
+    if data == "adm_add_dur_start":
+        set_user_state(user_id, "ADM_ADD_DUR_START")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "➕ **Add New Plan Duration**\n\n"
+                "Naye duration ki details is format me chat me bhejein:\n"
+                "`<key>, <label>, <days>, <emoji>`\n\n"
+                "**Example 1:** `60d, 2 Months, 60, 🗓️`\n"
+                "**Example 2:** `3d, 3 Days, 3, ⚡`\n"
+                "**Example 3:** `90d, 3 Months, 90, 📅`\n\n"
+                "*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 12f. Edit Duration Info
+    if data.startswith("adm_edit_dur_info:"):
+        dur_key = data.split(":", 1)[1].strip()
+        set_user_state(user_id, f"ADM_EDIT_DUR_INFO:{dur_key}")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                f"✏️ **Edit Duration `{dur_key}` Info**\n\n"
+                f"Naya Label, Days aur Emoji is format me chat me bhejein:\n"
+                f"`<label>, <days>, <emoji>`\n\n"
+                f"**Example:** `2 Months, 60, 🗓️`\n\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 12g. Delete Duration
+    if data.startswith("adm_del_dur:"):
+        dur_key = data.split(":", 1)[1].strip()
+        ok, msg = delete_duration_option(dur_key)
+        await callback_query.answer(msg, show_alert=True)
+        durations = get_all_duration_options()
+        text = (
+            "⏱️ **Plan Duration Settings (CRUD)**\n\n"
+            "Aap yahan se bot ke sabhi plan validity durations ko manage kar sakte hain:\n\n"
+        )
+        for d in durations:
+            text += f"• {d.get('emoji', '⏱️')} **{d['label']}** (`{d['key']}`) — `{d['days']} Din`\n"
+        text += "\n👇 *Neeche diye buttons se duration info edit karein, delete karein ya naya duration add karein:*"
+        try:
+            await callback_query.message.edit_text(
+                text,
+                reply_markup=admin_durations_crud_markup(durations),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
         return True
 
     # 13. Payment Gateway Dashboard
@@ -554,6 +640,89 @@ async def handle_admin_callbacks(client, callback_query, user_id: int, data: str
         except Exception:
             pass
         await callback_query.answer()
+        return True
+
+    # 21b. Start Interactive Broadcast
+    if data == "adm_start_broadcast":
+        set_user_state(user_id, "ADM_AWAITING_BROADCAST_MSG")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "📢 **Start Interactive Broadcast**\n\n"
+                "Aap jo message sabhi registered users ko bhejna chahte hain, woh abhi is chat me send karein.\n\n"
+                "• **Supported Media:** Photo, Video, Document/File, Audio, Voice Note, Sticker, Animation, Video Note ya Text!\n"
+                "• Formatting (Markdown, HTML, Links, Spoilers) sab preserve rahega.\n\n"
+                "*(Cancel karne ke liye /cancel bhejein)*"
+            ),
+        )
+        return True
+
+    # 21c. Cancel Interactive Broadcast
+    if data == "adm_cancel_broadcast":
+        clear_user_state(user_id)
+        await callback_query.answer("Broadcast cancel kar diya gaya.")
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        return True
+
+    # 21d. Confirm Interactive Broadcast
+    if data.startswith("adm_confirm_broadcast:"):
+        msg_id = int(data.split(":", 1)[1].strip())
+        await callback_query.answer("🚀 Broadcasting to all users...", show_alert=False)
+        try:
+            broadcast_msg = await client.get_messages(chat_id=user_id, message_ids=msg_id)
+        except Exception as exc:
+            await callback_query.message.reply_text(f"❌ Message load failed: {exc}")
+            return True
+
+        if not broadcast_msg:
+            await callback_query.message.reply_text("❌ Broadcast message nahi mila.")
+            return True
+
+        status = await callback_query.message.reply_text("📢 **Broadcast shuru ho raha hai...**")
+        users = get_recent_users(100000)
+        sent = 0
+        failed = 0
+        total_users = len(users)
+
+        for idx, u in enumerate(users, start=1):
+            uid = u.get("id")
+            if not uid or is_banned(uid):
+                continue
+            try:
+                await send_broadcast_to_user(client, uid, broadcast_msg, "")
+                sent += 1
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+                try:
+                    await send_broadcast_to_user(client, uid, broadcast_msg, "")
+                    sent += 1
+                except Exception:
+                    failed += 1
+            except Exception:
+                failed += 1
+
+            if idx % 25 == 0 or idx == total_users:
+                try:
+                    await status.edit_text(f"📢 **Broadcasting...**\nProgress: {idx}/{total_users}\n✅ Sent: {sent}\n❌ Failed: {failed}")
+                except Exception:
+                    pass
+            await asyncio.sleep(0.04)
+
+        await status.edit_text(f"📢 **Broadcast Complete!**\n\n✅ Sent: {sent}\n❌ Failed: {failed}\n👥 Total Users: {total_users}")
+        try:
+            add_broadcast_log({
+                "sent": sent,
+                "failed": failed,
+                "total": total_users,
+                "text": getattr(broadcast_msg, "caption", "") or getattr(broadcast_msg, "text", "") or "Media broadcast",
+                "created_at": str(int(time.time())),
+            })
+        except Exception:
+            pass
         return True
 
     # 21. Broadcast Help Text

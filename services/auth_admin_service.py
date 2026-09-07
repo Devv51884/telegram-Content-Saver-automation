@@ -137,16 +137,40 @@ async def finish_login_with_password(user_id: int, password: str):
 
 async def send_broadcast_to_user(client, uid: int, reply_msg, broadcast_text: str):
     if reply_msg:
+        # First priority: Try copy_message! It supports photos, videos, files/documents, stickers, animations, audio, voice, video_notes, text with buttons & formatting!
+        try:
+            if broadcast_text:
+                return await client.copy_message(
+                    chat_id=uid,
+                    from_chat_id=reply_msg.chat.id,
+                    message_id=reply_msg.id,
+                    caption=broadcast_text,
+                )
+            else:
+                return await client.copy_message(
+                    chat_id=uid,
+                    from_chat_id=reply_msg.chat.id,
+                    message_id=reply_msg.id,
+                )
+        except Exception:
+            pass
+
+        # Fallback to specific type handlers if copy_message failed:
         if reply_msg.photo:
-            return await client.send_photo(uid, photo=reply_msg.photo.file_id, caption=broadcast_text or reply_msg.caption or "")
+            file_id = reply_msg.photo.file_id if hasattr(reply_msg.photo, "file_id") else getattr(reply_msg.photo[-1], "file_id", "")
+            return await client.send_photo(uid, photo=file_id, caption=broadcast_text or reply_msg.caption or "")
         if reply_msg.video:
             return await client.send_video(uid, video=reply_msg.video.file_id, caption=broadcast_text or reply_msg.caption or "")
         if reply_msg.document:
             return await client.send_document(uid, document=reply_msg.document.file_id, caption=broadcast_text or reply_msg.caption or "")
+        if reply_msg.sticker:
+            return await client.send_sticker(uid, sticker=reply_msg.sticker.file_id)
         if reply_msg.audio:
             return await client.send_audio(uid, audio=reply_msg.audio.file_id, caption=broadcast_text or reply_msg.caption or "")
         if reply_msg.voice:
             return await client.send_voice(uid, voice=reply_msg.voice.file_id, caption=broadcast_text or reply_msg.caption or "")
+        if getattr(reply_msg, "video_note", None):
+            return await client.send_video_note(uid, video_note=reply_msg.video_note.file_id)
         if reply_msg.animation:
             return await client.send_animation(uid, animation=reply_msg.animation.file_id, caption=broadcast_text or reply_msg.caption or "")
         if reply_msg.text:
@@ -156,7 +180,8 @@ async def send_broadcast_to_user(client, uid: int, reply_msg, broadcast_text: st
     if not broadcast_text:
         raise RuntimeError("Empty broadcast text.")
 
-    return await client.send_message(uid, f"ðŸ“¢ **Code Devil Broadcast**\n\n{broadcast_text}", disable_web_page_preview=True)
+    return await client.send_message(uid, f"📢 **Code Devil Broadcast**\n\n{broadcast_text}", disable_web_page_preview=True)
+
 
 
 async def handle_admin_commands(client, message, lowered: str):
@@ -574,17 +599,33 @@ async def handle_admin_commands(client, message, lowered: str):
         users = get_recent_users(100000)
         sent = 0
         failed = 0
-        status = await message.reply_text("ðŸ“¢ Broadcast start ho raha hai...")
+        status = await message.reply_text("📢 Broadcast start ho raha hai...")
 
         broadcast_text = ""
-        parts = (message.text or "").split(maxsplit=1)
+        raw_content = message.text or message.caption or ""
+        parts = raw_content.split(maxsplit=1)
         if len(parts) > 1:
             broadcast_text = parts[1].strip()
 
         reply_msg = message.reply_to_message
+        if not reply_msg and (
+            getattr(message, "photo", None)
+            or getattr(message, "video", None)
+            or getattr(message, "document", None)
+            or getattr(message, "audio", None)
+            or getattr(message, "voice", None)
+            or getattr(message, "animation", None)
+            or getattr(message, "sticker", None)
+            or getattr(message, "video_note", None)
+        ):
+            reply_msg = message
 
-        for u in users:
-            await asyncio.sleep(0)
+        if not reply_msg and not broadcast_text:
+            await status.edit_text("❌ Kripya broadcast karne ke liye text message likhein ya kisi media message ko reply karke `/broadcast` bhejein.")
+            return True
+
+        total_users = len(users)
+        for idx, u in enumerate(users, start=1):
             uid = u.get("id")
             if not uid or is_banned(uid):
                 continue
@@ -602,8 +643,26 @@ async def handle_admin_commands(client, message, lowered: str):
             except Exception:
                 failed += 1
 
-        await status.edit_text(f"ðŸ“¢ **Broadcast Complete**\n\n✅ Sent: {sent}\n❌ Failed: {failed}")
+            if idx % 25 == 0 or idx == total_users:
+                try:
+                    await status.edit_text(f"📢 **Broadcasting...**\nProgress: {idx}/{total_users}\n✅ Sent: {sent}\n❌ Failed: {failed}")
+                except Exception:
+                    pass
+            await asyncio.sleep(0.04)
+
+        await status.edit_text(f"📢 **Broadcast Complete!**\n\n✅ Sent: {sent}\n❌ Failed: {failed}\n👥 Total: {total_users}")
+        try:
+            add_broadcast_log({
+                "sent": sent,
+                "failed": failed,
+                "total": total_users,
+                "text": broadcast_text or getattr(reply_msg, "caption", "") or getattr(reply_msg, "text", "") or "Media broadcast",
+                "created_at": now_iso() if "now_iso" in globals() else str(int(time.time())),
+            })
+        except Exception:
+            pass
         return True
+
 
     if lowered.startswith("/index_id"):
         set_index_mode(user_id, True)

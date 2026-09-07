@@ -180,3 +180,18 @@ def get_pending_orders() -> list[dict]:
         if order.get("status") == "pending" and int(order.get("expires_at", 0)) > now:
             pending.append(order)
     return sorted(pending, key=lambda x: int(x.get("created_at", 0)), reverse=True)
+
+
+def get_user_latest_pending_order(user_id: int) -> dict | None:
+    orders = _load_orders()
+    now = int(time.time())
+    candidates = []
+    for order in orders.values():
+        if int(order.get("user_id", 0)) == int(user_id) and order.get("status") == "pending":
+            if int(order.get("expires_at", 0)) > now:
+                candidates.append(order)
+    if candidates:
+        candidates.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+        return candidates[0]
+    return None
+

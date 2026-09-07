@@ -17,12 +17,23 @@ def extract_telegram_link_info(text: str):
         return None
 
     text = str(text).strip()
+    if text.startswith("t.me/"):
+        text = "https://" + text
+    elif text.startswith("http://"):
+        text = "https://" + text[7:]
+    text = re.sub(r"^https://(?:telegram\.(?:me|dog))/+", "https://t.me/", text)
     text = text.split("?", 1)[0].split("#", 1)[0].rstrip("/")
 
+    bot_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/b/([A-Za-z0-9_]+)/(\d+)$", text)
     private_topic_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/c/(\d+)/(\d+)/(\d+)$", text)
     private_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/c/(\d+)/(\d+)$", text)
     public_topic_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/([A-Za-z0-9_]+)/(\d+)/(\d+)$", text)
     public_match = re.search(r"https?://(?:t|telegram)\.(?:me|dog)/([A-Za-z0-9_]+)/(\d+)$", text)
+
+    if bot_match:
+        bot_username = bot_match.group(1)
+        msg_id = int(bot_match.group(2))
+        return {"chat_id": bot_username, "message_id": msg_id, "link_type": "bot"}
 
     if private_topic_match:
         raw_chat_id = private_topic_match.group(1)
@@ -41,13 +52,13 @@ def extract_telegram_link_info(text: str):
         username = public_topic_match.group(1)
         topic_id = int(public_topic_match.group(2))
         msg_id = int(public_topic_match.group(3))
-        if username.lower() != "c":
+        if username.lower() not in {"c", "b"}:
             return {"chat_id": username, "message_id": msg_id, "topic_id": topic_id, "link_type": "public_topic"}
 
     if public_match:
         username = public_match.group(1)
         msg_id = int(public_match.group(2))
-        if username.lower() != "c":
+        if username.lower() not in {"c", "b"}:
             return {"chat_id": username, "message_id": msg_id, "link_type": "public"}
 
     return None

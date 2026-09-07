@@ -8,6 +8,7 @@ from config import DATA_DIR, ADMIN_UPI_ID, ADMIN_UPI_NAME
 
 PLANS_FILE = os.path.join(DATA_DIR, "plans.json")
 PAYMENT_CONFIG_FILE = os.path.join(DATA_DIR, "payment_config.json")
+DURATIONS_CONFIG_FILE = os.path.join(DATA_DIR, "durations_config.json")
 _PLAN_LOCK = RLock()
 
 DEFAULT_DURATION_OPTIONS = [
@@ -18,6 +19,104 @@ DEFAULT_DURATION_OPTIONS = [
     {"key": "365d", "label": "1 Year", "days": 365, "emoji": "👑"},
     {"key": "lifetime", "label": "Lifetime", "days": 3650, "emoji": "♾️"},
 ]
+
+def get_all_duration_options() -> list[dict]:
+    with _PLAN_LOCK:
+        stored = _load_json(DURATIONS_CONFIG_FILE, None)
+        if stored is None or not isinstance(stored, list) or not stored:
+            _save_json(DURATIONS_CONFIG_FILE, DEFAULT_DURATION_OPTIONS)
+            return list(DEFAULT_DURATION_OPTIONS)
+        return stored
+
+
+def save_all_duration_options(options: list[dict]):
+    with _PLAN_LOCK:
+        _save_json(DURATIONS_CONFIG_FILE, options)
+
+
+def add_duration_option(key: str, label: str, days: int, emoji: str = "⏱️") -> tuple[bool, str]:
+    import re
+    key = str(key or "").strip().lower()
+    label = str(label or "").strip()
+    emoji = str(emoji or "⏱️").strip()
+    if not key or not re.match(r"^[a-z0-9_]+$", key):
+        return False, "❌ Key sirf alphanumeric honi chahiye (e.g. 3d, 60d, 90d)."
+    if not label:
+        return False, "❌ Label empty nahi ho sakta (e.g. 60 Days)."
+    try:
+        days = int(days)
+        if days <= 0:
+            raise ValueError()
+    except Exception:
+        return False, "❌ Days valid positive number hona chahiye (e.g. 60)."
+
+    with _PLAN_LOCK:
+        options = get_all_duration_options()
+        for opt in options:
+            if opt["key"] == key:
+                return False, f"❌ Duration key '{key}' already exist karti hai."
+
+        new_opt = {"key": key, "label": label, "days": days, "emoji": emoji}
+        options.append(new_opt)
+        save_all_duration_options(options)
+
+        plans = get_all_plans()
+        for plan_id, plan in plans.items():
+            base_price = int(plan.get("price", 99))
+            durations = plan.get("durations")
+            if not isinstance(durations, dict):
+                durations = {}
+            if key not in durations:
+                durations[key] = max(9, round(base_price * (days / 30.0)))
+                plan["durations"] = durations
+        _save_json(PLANS_FILE, plans)
+
+    return True, f"✅ Duration '{label}' ({key}) successfully add ho gaya!"
+
+
+def update_duration_option(key: str, label: str | None = None, days: int | None = None, emoji: str | None = None) -> tuple[bool, str]:
+    key = str(key or "").strip().lower()
+    with _PLAN_LOCK:
+        options = get_all_duration_options()
+        found = False
+        for opt in options:
+            if opt["key"] == key:
+                if label:
+                    opt["label"] = str(label).strip()
+                if days and int(days) > 0:
+                    opt["days"] = int(days)
+                if emoji:
+                    opt["emoji"] = str(emoji).strip()
+                found = True
+                break
+        if not found:
+            return False, f"❌ Duration '{key}' nahi mila."
+        save_all_duration_options(options)
+    return True, f"✅ Duration '{key}' successfully update ho gaya!"
+
+
+def delete_duration_option(key: str) -> tuple[bool, str]:
+    key = str(key or "").strip().lower()
+    with _PLAN_LOCK:
+        options = get_all_duration_options()
+        if len(options) <= 1:
+            return False, "❌ Kam se kam ek duration option ka rehna zaroori hai."
+
+        remaining = [opt for opt in options if opt["key"] != key]
+        if len(remaining) == len(options):
+            return False, f"❌ Duration '{key}' nahi mila."
+
+        save_all_duration_options(remaining)
+
+        plans = get_all_plans()
+        for plan in plans.values():
+            durations = plan.get("durations")
+            if isinstance(durations, dict) and key in durations:
+                del durations[key]
+        _save_json(PLANS_FILE, plans)
+
+    return True, f"✅ Duration '{key}' successfully delete ho gaya!"
+
 
 DEFAULT_TIER_DURATIONS = {
     "silver": {
@@ -186,11 +285,11 @@ def get_plan_durations(plan_or_id: str | dict) -> list[dict]:
     base_price = int(plan.get("price", 99))
 
     durations_list = []
-    for opt in DEFAULT_DURATION_OPTIONS:
+    for opt in get_all_duration_options():
         key = opt["key"]
         label = opt["label"]
         days = opt["days"]
-        emoji = opt["emoji"]
+        emoji = opt.get("emoji", "⏱️")
 
         if custom_durations and key in custom_durations:
             price = max(1, int(custom_durations[key]))
@@ -210,7 +309,7 @@ def get_plan_durations(plan_or_id: str | dict) -> list[dict]:
             elif key == "lifetime":
                 price = max(399, round(base_price * 8.0))
             else:
-                price = base_price
+                price = max(9, round(base_price * (days / 30.0)))
 
         durations_list.append({
             "key": key,
@@ -221,6 +320,7 @@ def get_plan_durations(plan_or_id: str | dict) -> list[dict]:
             "display": f"{emoji} {label} — ₹{price}",
         })
     return durations_list
+
 
 
 def get_plan_duration_info(plan_or_id: str | dict, duration_key: str) -> dict:

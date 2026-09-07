@@ -109,6 +109,8 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
         except Exception:
             pass
 
+        set_user_state(user_id, f"AWAITING_PAYMENT_UTR:{order['order_id']}")
+
         try:
             if qr_file_path and os.path.exists(qr_file_path):
                 await client.send_photo(
@@ -129,6 +131,7 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
 
         await callback_query.answer()
         return True
+
 
     if data.startswith("pay_check:"):
         order_id = data.split(":", 1)[1].strip()
@@ -162,6 +165,30 @@ async def handle_payment_callbacks(client, callback_query, user_id: int, data: s
         await callback_query.answer(
             "⏳ Bank se payment abhi confirm nahi hui hai.\n\nAgar aapne pay kar diya hai toh 10-15s baad dobara check karein ya 'Submit 12-Digit UTR' par click karein.",
             show_alert=True,
+        )
+        return True
+
+    if data.startswith("pay_screenshot:"):
+        order_id = data.split(":", 1)[1].strip()
+        order = get_order(order_id)
+        if not order:
+            await callback_query.answer("❌ Order nahi mila.", show_alert=True)
+            return True
+
+        if is_order_expired(order):
+            await callback_query.answer("⏱️ Yeh order expire ho chuka hai.", show_alert=True)
+            return True
+
+        set_user_state(user_id, f"AWAITING_PAYMENT_UTR:{order_id}")
+        await callback_query.answer()
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                f"📸 **Order #{order_id} (₹{order.get('amount')}) — Screenshot Upload**\n\n"
+                f"Kripya payment receipt ya confirmation ka photo yahan send karein!\n\n"
+                f"💡 *Aap photo ke caption me 12-digit UTR bhi likh sakte hain.*\n"
+                f"*(Cancel karne ke liye /cancel bhejein)*"
+            ),
         )
         return True
 

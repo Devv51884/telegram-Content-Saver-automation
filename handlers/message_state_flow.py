@@ -5,7 +5,12 @@ from runtime_context import *
 from services.auth_admin_service import *
 from services.storage_service import *
 from services.task_service import *
-from features.payment_manager import submit_order_utr, get_order, attach_order_screenshot
+from features.payment_manager import (
+    submit_order_utr,
+    get_order,
+    attach_order_screenshot,
+    get_user_latest_pending_order,
+)
 from features.plan_manager import (
     save_plan,
     update_plan_price,
@@ -16,8 +21,29 @@ from features.plan_manager import (
     set_custom_qr,
     get_plan_by_id,
     get_plan_duration_info,
+    add_duration_option,
+    update_duration_option,
+    delete_duration_option,
 )
 from keyboards import admin_payment_approval_markup
+
+
+
+def _extract_media_image_file_id(message) -> str:
+    photo = getattr(message, "photo", None)
+    if photo:
+        if hasattr(photo, "file_id"):
+            return str(photo.file_id)
+        if isinstance(photo, (list, tuple)) and len(photo) > 0:
+            return str(getattr(photo[-1], "file_id", ""))
+    doc = getattr(message, "document", None)
+    if doc:
+        mime = str(getattr(doc, "mime_type", "") or "").lower()
+        fname = str(getattr(doc, "file_name", "") or "").lower()
+        if mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return str(getattr(doc, "file_id", ""))
+    return ""
+
 
 
 async def _send_admin_payment_notification(client, order_id: str, utr: str, user_id: int, order: dict, screenshot_file_id: str = ""):
@@ -191,17 +217,52 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
             await message.reply_text(f"File save failed: {e}")
         return True
 
+    if not state and not lowered.startswith("/"):
+        pending_order = get_user_latest_pending_order(user_id)
+        if pending_order:
+            order_id = pending_order.get("order_id")
+            file_id = _extract_media_image_file_id(message)
+            match = re.search(r"\b(\d{12})\b", text_raw or text)
+            if file_id and match:
+                utr = match.group(1)
+                ok, response_msg = submit_order_utr(order_id, utr, screenshot_file_id=file_id)
+                if ok:
+                    clear_user_state(user_id)
+                    order = get_order(order_id) or pending_order
+                    await message.reply_text(
+                        f"✅ **Payment Screenshot & UTR (#{utr}) Received!**\n\n"
+                        f"Aapka payment proof submit ho gaya hai. Admin dwara verify hote hi **{order.get('plan_name', 'Plan')}** activate ho jayega."
+                    )
+                    await _send_admin_payment_notification(client, order_id, utr, user_id, order, screenshot_file_id=file_id)
+                    return True
+            elif file_id:
+                attach_order_screenshot(order_id, file_id)
+                set_user_state(user_id, f"AWAITING_UTR_FOR_PHOTO:{order_id}:{file_id}")
+                await message.reply_text(
+                    f"📸 **Payment Screenshot Received for Order #{order_id}!**\n\n"
+                    f"Ab kripya is payment ka **12-digit UPI Reference / UTR Number** chat me type karke send karein taaki hum verify kar sakein.\n\n"
+                    f"*(GPay, PhonePe ya Paytm receipt par 'UPI Ref No.' ya 'UTR' 12 digits ka hota hai)*"
+                )
+                return True
+            elif match:
+                utr = match.group(1)
+                ok, response_msg = submit_order_utr(order_id, utr)
+                if ok:
+                    set_user_state(user_id, f"OPTIONAL_SCREENSHOT:{order_id}")
+                    order = get_order(order_id) or pending_order
+                    await message.reply_text(
+                        f"✅ **UTR Received (#{utr}) for Order #{order_id}!**\n\n"
+                        f"Aapka UTR submit ho gaya hai.\n\n"
+                        f"📸 *Tip: Verification fast karne ke liye aap abhi payment receipt ka photo/screenshot bhi bhej sakte hain (Optional).*\n\n"
+                        f"Ya seedha verification ka intezar karein."
+                    )
+                    await _send_admin_payment_notification(client, order_id, utr, user_id, order)
+                    return True
+
     if state and not lowered.startswith("/cancel"):
         if state.startswith("AWAITING_PAYMENT_UTR:"):
             order_id = state.split(":", 1)[1]
-            photo = getattr(message, "photo", None)
-            doc = getattr(message, "document", None)
-            file_id = ""
-
-            if photo:
-                file_id = photo[-1].file_id
-            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
-                file_id = doc.file_id
+            file_id = _extract_media_image_file_id(message)
 
             # Case 1: User sent photo WITH or WITHOUT caption
             if file_id:
@@ -222,6 +283,7 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
                     await _send_admin_payment_notification(client, order_id, utr, user_id, order, screenshot_file_id=file_id)
                     return True
                 else:
+                    attach_order_screenshot(order_id, file_id)
                     set_user_state(user_id, f"AWAITING_UTR_FOR_PHOTO:{order_id}:{file_id}")
                     await message.reply_text(
                         "📸 **Payment Screenshot Received!**\n\n"
@@ -280,14 +342,7 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
 
         if state.startswith("OPTIONAL_SCREENSHOT:"):
             order_id = state.split(":", 1)[1]
-            photo = getattr(message, "photo", None)
-            doc = getattr(message, "document", None)
-            file_id = ""
-
-            if photo:
-                file_id = photo[-1].file_id
-            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
-                file_id = doc.file_id
+            file_id = _extract_media_image_file_id(message)
 
             if file_id:
                 attach_order_screenshot(order_id, file_id)
@@ -320,6 +375,7 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
             else:
                 clear_user_state(user_id)
 
+
         if state.startswith("ADM_EDIT_DUR_PRICE:"):
             if not is_admin(user_id):
                 clear_user_state(user_id)
@@ -347,19 +403,76 @@ async def handle_message_state_and_profile(client, message, user_id: int, text_r
                 await message.reply_text("❌ Price update fail hua. Plan nahi mila.")
             return True
 
+        if state == "ADM_ADD_DUR_START":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            parts = [p.strip() for p in text_raw.split(",")]
+            if len(parts) < 3:
+                await message.reply_text(
+                    "❌ Sahi format me bhejein:\n`<key>, <label>, <days>, <emoji>`\n\n"
+                    "**Example:** `60d, 2 Months, 60, 🗓️`\n\n"
+                    "*(Cancel karne ke liye /cancel bhejein)*"
+                )
+                return True
+            dur_key = parts[0].lower()
+            label = parts[1]
+            try:
+                days = int(parts[2])
+            except Exception:
+                await message.reply_text("❌ Days valid number hona chahiye (e.g. 60).")
+                return True
+            emoji = parts[3] if len(parts) > 3 else "⏱️"
+            ok, msg = add_duration_option(dur_key, label, days, emoji)
+            clear_user_state(user_id)
+            await message.reply_text(msg)
+            return True
+
+        if state.startswith("ADM_EDIT_DUR_INFO:"):
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            dur_key = state.split(":", 1)[1]
+            parts = [p.strip() for p in text_raw.split(",")]
+            if len(parts) < 2:
+                await message.reply_text(
+                    "❌ Sahi format me bhejein:\n`<label>, <days>, <emoji>`\n\n"
+                    "**Example:** `2 Months, 60, 🗓️`\n\n"
+                    "*(Cancel karne ke liye /cancel bhejein)*"
+                )
+                return True
+            label = parts[0]
+            try:
+                days = int(parts[1])
+            except Exception:
+                await message.reply_text("❌ Days valid number hona chahiye (e.g. 60).")
+                return True
+            emoji = parts[2] if len(parts) > 2 else "⏱️"
+            ok, msg = update_duration_option(dur_key, label=label, days=days, emoji=emoji)
+            clear_user_state(user_id)
+            await message.reply_text(msg)
+            return True
+
+        if state == "ADM_AWAITING_BROADCAST_MSG":
+            if not is_admin(user_id):
+                clear_user_state(user_id)
+                return True
+            clear_user_state(user_id)
+            from keyboards import admin_broadcast_confirm_markup
+            await message.reply_text(
+                "📢 **Broadcast Message Staged!**\n\n"
+                "Upar diya gaya message sabhi registered users ko bhejne ke liye ready hai.\n\n"
+                "Confirm karne ke liye neeche **'🚀 Confirm & Send to All Users'** button dabayein:",
+                reply_markup=admin_broadcast_confirm_markup(message_id=message.id),
+            )
+            return True
+
         if state == "ADM_UPLOAD_CUSTOM_QR":
             if not is_admin(user_id):
                 clear_user_state(user_id)
                 return True
 
-            photo = getattr(message, "photo", None)
-            doc = getattr(message, "document", None)
-            file_id = ""
-
-            if photo:
-                file_id = photo[-1].file_id
-            elif doc and getattr(doc, "mime_type", "").startswith("image/"):
-                file_id = doc.file_id
+            file_id = _extract_media_image_file_id(message)
 
             if not file_id:
                 await message.reply_text("❌ Kripya ek QR code image/photo send karein, ya /cancel karein.")

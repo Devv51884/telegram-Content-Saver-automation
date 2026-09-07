@@ -46,6 +46,7 @@ async def clone_known_message_to_target_impl(
     attempts = []
     error_codes = []
 
+    has_custom_caption = False
     copy_kwargs_extra = {}
     if source_msg and settings:
         try:
@@ -53,8 +54,10 @@ async def clone_known_message_to_target_impl(
             if analysis.get("caption_transform"):
                 custom_caption = build_final_caption(source_msg, settings, index_no=index_no, storage_mode="telegram")
                 caption_parse_mode = get_parse_mode(settings.get("caption_parse_mode", "html"))
-                copy_kwargs_extra["caption"] = custom_caption
-                copy_kwargs_extra["parse_mode"] = caption_parse_mode
+                if custom_caption:
+                    copy_kwargs_extra["caption"] = custom_caption[:1024]
+                    copy_kwargs_extra["parse_mode"] = caption_parse_mode
+                    has_custom_caption = True
         except Exception as exc:
             debug_log(f"direct copy caption formatting error: {exc}")
 
@@ -68,12 +71,14 @@ async def clone_known_message_to_target_impl(
         }
         return client.copy_message(**kwargs)
 
-    operations = (
+    operations = [
         (
             "copy",
             _copy_call,
         ),
-        (
+    ]
+    if not has_custom_caption:
+        operations.append((
             "forward",
             lambda extra: client.forward_messages(
                 chat_id=target,
@@ -82,8 +87,8 @@ async def clone_known_message_to_target_impl(
                 drop_author=False,
                 **extra,
             ),
-        ),
-    )
+        ))
+
 
     for action_name, operation in operations:
         for message_thread_id in iter_optional_topic_ids(topic_id):

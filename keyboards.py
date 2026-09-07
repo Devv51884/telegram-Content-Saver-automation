@@ -226,17 +226,33 @@ def admin_premium_buttons():
 def admin_broadcast_buttons():
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("🚀 Start New Broadcast", callback_data="adm_start_broadcast"),
+        ],
+        [
             InlineKeyboardButton("📝 Text Guide", callback_data="admin_broadcast_help"),
             InlineKeyboardButton("📦 Media Guide", callback_data="admin_broadcast_media_help"),
         ],
         [
             InlineKeyboardButton("📊 Broadcast Stats", callback_data="admin_broadcast_stats"),
+            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
         ],
         [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_admin_panel"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
         ],
     ])
+
+
+def admin_broadcast_confirm_markup(message_id: int = 0):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Confirm & Send to All Users", callback_data=f"adm_confirm_broadcast:{message_id}"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel Broadcast", callback_data="adm_cancel_broadcast"),
+        ],
+    ])
+
+
 
 
 def admin_task_debug_buttons():
@@ -744,10 +760,14 @@ def order_payment_markup(order_id: str, deep_links: dict | None = None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"pay_check:{order_id}")],
         [
+            InlineKeyboardButton("📸 Upload Screenshot", callback_data=f"pay_screenshot:{order_id}"),
             InlineKeyboardButton("✅ Submit 12-Digit UTR", callback_data=f"pay_utr:{order_id}"),
+        ],
+        [
             InlineKeyboardButton("❌ Cancel Order", callback_data=f"pay_cancel:{order_id}"),
         ],
     ])
+
 
 
 def admin_payment_approval_markup(order_id: str, has_screenshot: bool = False):
@@ -775,13 +795,34 @@ def admin_plans_list_markup(plans: dict):
 
     rows.append([
         InlineKeyboardButton("➕ Create New Plan", callback_data="adm_add_plan_start"),
-        InlineKeyboardButton("🔄 Reset Defaults", callback_data="adm_reset_plans"),
+        InlineKeyboardButton("⏱️ Duration CRUD", callback_data="adm_manage_durations"),
     ])
     rows.append([
+        InlineKeyboardButton("🔄 Reset Defaults", callback_data="adm_reset_plans"),
         InlineKeyboardButton("⬅️ Back to Admin Panel", callback_data="show_admin_panel"),
+    ])
+    rows.append([
         InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def admin_durations_crud_markup(durations: list[dict]):
+    rows = []
+    for dur in durations:
+        rows.append([
+            InlineKeyboardButton(f"{dur.get('emoji', '⏱️')} {dur['label']} ({dur['days']}d)", callback_data=f"adm_edit_dur_info:{dur['key']}"),
+            InlineKeyboardButton("🗑️ Delete", callback_data=f"adm_del_dur:{dur['key']}"),
+        ])
+    rows.append([
+        InlineKeyboardButton("➕ Add New Duration", callback_data="adm_add_dur_start"),
+    ])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back to Plans", callback_data="admin_manage_plans"),
+        InlineKeyboardButton("👑 Admin Panel", callback_data="show_admin_panel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
 
 
 def admin_plan_action_markup(plan_id: str, is_active: bool):

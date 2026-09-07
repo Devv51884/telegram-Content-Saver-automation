@@ -2452,36 +2452,53 @@ def clear_batch_input(user_id: int):
 
 def _normalize_batch_token(token: str) -> str:
     token = str(token or "").strip()
-    token = token.strip("[](){}<>")
+    token = token.strip("[](){}<>\"'")
     return token.rstrip(".,;")
 
 
 def _expand_tme_range_link(link: str):
     link = _normalize_batch_token(link)
+    if not link:
+        return []
     link = link.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+
+    # Normalize schema and domains
+    if link.startswith("t.me/"):
+        link = "https://" + link
+    elif link.startswith("http://"):
+        link = "https://" + link[7:]
+    link = re.sub(r"^https://(?:telegram\.(?:me|dog))/+", "https://t.me/", link)
+
     if not link.startswith("https://t.me/"):
         return []
 
-    private_range = re.fullmatch(r"(https://t\.me/c/\d+/)(\d+)-(\d+)", link)
-    private_topic_range = re.fullmatch(r"(https://t\.me/c/\d+/\d+/)(\d+)-(\d+)", link)
-    public_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/)(\d+)-(\d+)", link)
-    public_topic_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/\d+/)(\d+)-(\d+)", link)
+    # Support range patterns with -, .., or :
+    # E.g. https://t.me/c/123456/10-20 or 10..20 or 10:20
+    private_range = re.fullmatch(r"(https://t\.me/c/\d+/)(\d+)(?:-|\.\.|:)(\d+)", link)
+    private_topic_range = re.fullmatch(r"(https://t\.me/c/\d+/\d+/)(\d+)(?:-|\.\.|:)(\d+)", link)
+    public_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/)(\d+)(?:-|\.\.|:)(\d+)", link)
+    public_topic_range = re.fullmatch(r"(https://t\.me/[A-Za-z0-9_]+/\d+/)(\d+)(?:-|\.\.|:)(\d+)", link)
+    bot_range = re.fullmatch(r"(https://t\.me/b/[A-Za-z0-9_]+/)(\d+)(?:-|\.\.|:)(\d+)", link)
 
     private_single = re.fullmatch(r"https://t\.me/c/\d+/\d+", link)
     private_topic_single = re.fullmatch(r"https://t\.me/c/\d+/\d+/\d+", link)
     public_single = re.fullmatch(r"https://t\.me/[A-Za-z0-9_]+/\d+", link)
     public_topic_single = re.fullmatch(r"https://t\.me/[A-Za-z0-9_]+/\d+/\d+", link)
+    bot_single = re.fullmatch(r"https://t\.me/b/[A-Za-z0-9_]+/\d+", link)
 
-    for match in (private_range, private_topic_range, public_range, public_topic_range):
+    for match in (private_range, private_topic_range, public_range, public_topic_range, bot_range):
         if match:
             prefix = match.group(1)
             start = int(match.group(2))
             end = int(match.group(3))
             if start > end:
                 start, end = end, start
+            # Safety limit: max 2000 links per range
+            if end - start > 2000:
+                end = start + 2000
             return [f"{prefix}{message_id}" for message_id in range(start, end + 1)]
 
-    if private_single or private_topic_single or public_single or public_topic_single:
+    if private_single or private_topic_single or public_single or public_topic_single or bot_single:
         return [link]
     return []
 
@@ -2490,7 +2507,8 @@ def parse_batch_links(raw_text: str):
     if not raw_text:
         return []
     tokens = []
-    for line in str(raw_text).splitlines():
+    # Support comma, tab, space, newline separation
+    for line in str(raw_text).replace(",", "\n").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -2504,6 +2522,7 @@ def parse_batch_links(raw_text: str):
                 seen.add(link)
                 links.append(link)
     return links
+
 
 
 # =========================================================
