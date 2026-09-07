@@ -53,6 +53,7 @@ if [ ! -f "$DIR/.env" ]; then
     echo "⚠️ .env file not found in $DIR."
     echo "Please create .env file and then run: systemctl start telegram-bot"
 else
+    pkill -f "python main.py" 2>/dev/null || true
     systemctl restart telegram-bot
     echo "=========================================="
     echo "🎉 Deployment Complete! Bot is LIVE 24/7"
