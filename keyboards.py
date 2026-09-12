@@ -279,39 +279,58 @@ def submenu_nav(back: str = "show_settings_home"):
 
 
 # ---------- SETTINGS SUB MENUS ----------
-def thumbnail_buttons(enabled: bool):
-    label = _yes_no_label(enabled, "✅ Thumbnail On", "❌ Thumbnail Off")
-    return InlineKeyboardMarkup([
+def thumbnail_buttons(enabled: bool, has_file: bool = False):
+    label = _yes_no_label(enabled, "🟢 Thumbnail: ACTIVE", "🔴 Thumbnail: DISABLED")
+    rows = [
         [InlineKeyboardButton(label, callback_data="toggle_thumbnail_enabled")],
-        [InlineKeyboardButton("📷 Set Thumbnail", callback_data="set_thumbnail_photo")],
-        [InlineKeyboardButton("🗑 Remove Thumbnail", callback_data="remove_thumbnail")],
-        [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
-            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
-        ],
+    ]
+    if has_file:
+        rows.append([
+            InlineKeyboardButton("👁️ View Thumbnail", callback_data="view_thumbnail_photo"),
+            InlineKeyboardButton("📸 Change Thumbnail", callback_data="set_thumbnail_photo"),
+        ])
+        rows.append([InlineKeyboardButton("🗑 Remove Thumbnail", callback_data="remove_thumbnail")])
+    else:
+        rows.append([InlineKeyboardButton("📸 Set Thumbnail Photo", callback_data="set_thumbnail_photo")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
+    return InlineKeyboardMarkup(rows)
 
 
-def caption_buttons(enabled: bool):
-    label = _yes_no_label(enabled, "✅ Caption On", "❌ Caption Off")
-    return InlineKeyboardMarkup([
+def caption_buttons(enabled: bool, has_caption: bool = False):
+    label = _yes_no_label(enabled, "🟢 Custom Caption: ACTIVE", "🔴 Custom Caption: DISABLED")
+    rows = [
         [InlineKeyboardButton(label, callback_data="toggle_caption_enabled")],
-        [InlineKeyboardButton("✍️ Set Caption", callback_data="set_caption_text")],
-        [InlineKeyboardButton("🔢 Index Format", callback_data="show_caption_index_settings")],
-        [InlineKeyboardButton("🗑 Remove Caption", callback_data="remove_caption")],
-        [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
-            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
-        ],
+    ]
+    if has_caption:
+        rows.append([
+            InlineKeyboardButton("✍️ Edit Caption", callback_data="set_caption_text"),
+            InlineKeyboardButton("🗑 Remove Caption", callback_data="remove_caption"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton("✍️ Set Custom Caption", callback_data="set_caption_text"),
+        ])
+    rows.append([
+        InlineKeyboardButton("🔢 Index Formatting ({index})", callback_data="show_caption_index_settings"),
     ])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def caption_index_buttons(enabled: bool):
-    label = _yes_no_label(enabled, "✅ {index} On", "❌ {index} Off")
+    label = _yes_no_label(enabled, "🟢 {index} Counter: ON", "🔴 {index} Counter: OFF")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_caption_index_enabled")],
-        [InlineKeyboardButton("🔢 Set Padding", callback_data="set_caption_index_padding")],
-        [InlineKeyboardButton("🚀 Set Start", callback_data="set_caption_index_start")],
+        [
+            InlineKeyboardButton("🔢 Set Padding (e.g. 2)", callback_data="set_caption_index_padding"),
+            InlineKeyboardButton("🚀 Set Start (e.g. 1)", callback_data="set_caption_index_start"),
+        ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="show_caption"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
@@ -320,10 +339,10 @@ def caption_index_buttons(enabled: bool):
 
 
 def simple_set_buttons(set_cb: str, remove_cb: str = "", back: str = "show_settings_home"):
-    rows = [[InlineKeyboardButton("✍️ Set Value", callback_data=set_cb)]]
+    rows = [[InlineKeyboardButton("✍️ Set / Update Value", callback_data=set_cb)]]
 
     if remove_cb:
-        rows.append([InlineKeyboardButton("🗑 Remove", callback_data=remove_cb)])
+        rows.append([InlineKeyboardButton("🗑 Clear Value", callback_data=remove_cb)])
 
     rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data=back),
@@ -376,31 +395,37 @@ def index_buttons(enabled: bool):
     ])
 
 
-def auto_rename_buttons(enabled: bool):
-    label = _yes_no_label(enabled, "✅ Auto Rename On", "❌ Auto Rename Off")
-    return InlineKeyboardMarkup([
+def auto_rename_buttons(enabled: bool, has_rename: bool = False):
+    label = _yes_no_label(enabled, "🟢 Auto Rename: ACTIVE", "🔴 Auto Rename: DISABLED")
+    rows = [
         [InlineKeyboardButton(label, callback_data="toggle_auto_rename_enabled")],
-        [InlineKeyboardButton("✍️ Simple Rename", callback_data="set_auto_rename")],
-        [InlineKeyboardButton("🧩 Rename Template", callback_data="set_rename_template")],
         [
-            InlineKeyboardButton("🏷 Filename Prefix", callback_data="set_filename_prefix"),
-            InlineKeyboardButton("🔖 Filename Suffix", callback_data="set_filename_suffix"),
+            InlineKeyboardButton("✍️ Simple Rename", callback_data="set_auto_rename"),
+            InlineKeyboardButton("🧩 Advanced Template", callback_data="set_rename_template"),
         ],
-        [InlineKeyboardButton("🔢 Filename Index", callback_data="show_filename_index_settings")],
-        [InlineKeyboardButton("🗑 Remove Rename", callback_data="remove_auto_rename")],
         [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
-            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+            InlineKeyboardButton("🏷️ Prefix", callback_data="set_filename_prefix"),
+            InlineKeyboardButton("🔖 Suffix", callback_data="set_filename_suffix"),
         ],
+        [InlineKeyboardButton("🔢 Filename {index} Settings", callback_data="show_filename_index_settings")],
+    ]
+    if has_rename:
+        rows.append([InlineKeyboardButton("🗑 Reset All Rename Rules", callback_data="remove_auto_rename")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
+    return InlineKeyboardMarkup(rows)
 
 
 def filename_index_buttons(enabled: bool):
-    label = _yes_no_label(enabled, "✅ Filename {index} On", "❌ Filename {index} Off")
+    label = _yes_no_label(enabled, "🟢 Filename {index}: ON", "🔴 Filename {index}: OFF")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data="toggle_filename_index_enabled")],
-        [InlineKeyboardButton("🔢 Set Padding", callback_data="set_filename_index_padding")],
-        [InlineKeyboardButton("🚀 Set Start", callback_data="set_filename_index_start")],
+        [
+            InlineKeyboardButton("🔢 Set Padding (e.g. 2)", callback_data="set_filename_index_padding"),
+            InlineKeyboardButton("🚀 Set Start (e.g. 1)", callback_data="set_filename_index_start"),
+        ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="show_auto_rename"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
@@ -409,33 +434,39 @@ def filename_index_buttons(enabled: bool):
 
 
 def destination_buttons(has_destination: bool = False, has_topic: bool = False):
-    dest_label = "✅ Destination Set" if has_destination else "❌ Destination Not Set"
-    topic_label = "✅ Topic Set" if has_topic else "❌ Topic Not Set"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(dest_label, callback_data="show_destination")],
-        [InlineKeyboardButton("📌 Set Destination", callback_data="set_destination")],
-        [InlineKeyboardButton(topic_label, callback_data="show_topic_id")],
-        [InlineKeyboardButton("🧵 Set Topic ID", callback_data="set_topic_id")],
-        [
-            InlineKeyboardButton("🧹 Clear Topic", callback_data="clear_topic_id"),
-            InlineKeyboardButton("🗑 Clear Destination", callback_data="clear_destination"),
-        ],
-        [
-            InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
-            InlineKeyboardButton("❌ Close", callback_data="close_settings"),
-        ],
+    dest_badge = "✅ Target: Custom Destination" if has_destination else "💬 Target: PM Chat (Default)"
+    topic_badge = "📌 Topic: Configured" if has_topic else "⚪ Topic: None (General)"
+    rows = [
+        [InlineKeyboardButton(dest_badge, callback_data="noop")],
+        [InlineKeyboardButton("📢 Set Custom Channel / Chat", callback_data="set_destination")],
+    ]
+    if has_destination:
+        rows.append([
+            InlineKeyboardButton("💬 Reset to PM (Bot Chat)", callback_data="clear_destination"),
+        ])
+    rows.extend([
+        [InlineKeyboardButton(topic_badge, callback_data="noop")],
+        [InlineKeyboardButton("🧵 Set Forum Topic ID", callback_data="set_topic_id")],
     ])
+    if has_topic:
+        rows.append([InlineKeyboardButton("🧹 Clear Topic ID", callback_data="clear_topic_id")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def upload_mode_buttons(upload_mode: str = "media"):
-    current = _upload_mode_button_label(upload_mode)
+    mode = str(upload_mode or "media").strip().lower()
+    media_active = "🔘 Media (Streamable)" if mode == "media" else "⚪ Media"
+    doc_active = "🔘 Document (Raw File)" if mode == "document" else "⚪ Document"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Current: {current}", callback_data="noop")],
         [
-            InlineKeyboardButton("🎞 Media", callback_data="set_upload_mode:media"),
-            InlineKeyboardButton("📄 Document", callback_data="set_upload_mode:document"),
+            InlineKeyboardButton(media_active, callback_data="set_upload_mode:media"),
+            InlineKeyboardButton(doc_active, callback_data="set_upload_mode:document"),
         ],
-        [InlineKeyboardButton("🔁 Quick Toggle", callback_data="toggle_upload_mode")],
+        [InlineKeyboardButton("🔁 Switch Mode", callback_data="toggle_upload_mode")],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
             InlineKeyboardButton("❌ Close", callback_data="close_settings"),
@@ -670,24 +701,30 @@ def advanced_settings_buttons(
 def replace_words_buttons(file_enabled: bool = False, caption_enabled: bool | None = None):
     if caption_enabled is None:
         caption_enabled = file_enabled
-    file_label = "File Rules On" if file_enabled else "File Rules Off"
-    caption_label = "Caption Rules On" if caption_enabled else "Caption Rules Off"
-    return InlineKeyboardMarkup([
+    file_label = "🟢 File Rules: ACTIVE" if file_enabled else "⚪ File Rules: NONE"
+    caption_label = "🟢 Caption Rules: ACTIVE" if caption_enabled else "⚪ Caption Rules: NONE"
+    rows = [
         [
             InlineKeyboardButton(file_label, callback_data="noop"),
             InlineKeyboardButton(caption_label, callback_data="noop"),
         ],
         [
-            InlineKeyboardButton("Set File Rules", callback_data="set_replace_words_file"),
-            InlineKeyboardButton("Set Caption Rules", callback_data="set_replace_words_caption"),
+            InlineKeyboardButton("📁 Set File Rules", callback_data="set_replace_words_file"),
+            InlineKeyboardButton("📝 Set Caption Rules", callback_data="set_replace_words_caption"),
         ],
-        [
-            InlineKeyboardButton("Clear File Rules", callback_data="clear_replace_words_file"),
-            InlineKeyboardButton("Clear Caption Rules", callback_data="clear_replace_words_caption"),
-        ],
-        [InlineKeyboardButton("Clear All", callback_data="clear_replace_words")],
-        [InlineKeyboardButton("Back", callback_data="show_settings_home"), InlineKeyboardButton("Close", callback_data="close_settings")],
+        [InlineKeyboardButton("🌐 Set Global Rules (Both)", callback_data="set_replace_words")],
+    ]
+    if file_enabled or caption_enabled:
+        rows.append([
+            InlineKeyboardButton("🧹 Clear File", callback_data="clear_replace_words_file"),
+            InlineKeyboardButton("🧹 Clear Caption", callback_data="clear_replace_words_caption"),
+        ])
+        rows.append([InlineKeyboardButton("🗑 Clear All Rules", callback_data="clear_replace_words")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="show_settings_home"),
+        InlineKeyboardButton("❌ Close", callback_data="close_settings"),
     ])
+    return InlineKeyboardMarkup(rows)
 
 
 def storage_mode_buttons(current_mode: str = "telegram", allowed_modes: list[str] | None = None):

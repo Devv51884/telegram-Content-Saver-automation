@@ -415,30 +415,48 @@ def admin_premium_help_text():
 
 
 def upload_mode_text(user_id: int = 0):
-    mode = "Media"
+    mode = "media"
     if user_id:
-        mode = _upload_mode_display(get_user_settings(user_id).get("upload_mode", "media"))
+        mode = str(get_user_settings(user_id).get("upload_mode", "media") or "media").strip().lower()
+    is_doc = mode == "document"
 
-    return (
-        "📤 **Upload Mode**\n\n"
-        f"Current upload mode: **{mode}**\n\n"
-        "**Media Mode:**\n"
-        "Photo, video, audio ko media type me bhejne ki koshish hogi.\n\n"
-        "**Document Mode:**\n"
-        "Files ko document ki tarah bheja jayega.\n\n"
-        "Settings button se mode toggle kar sakte ho."
-    )
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  📤  **TELEGRAM UPLOAD FORMAT**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Format:** {'📄 Document (Original File)' if is_doc else '🎞️ Media (Streamable Video/Photo)'}",
+        "",
+        "🔍 **Format Difference:**",
+        "• **🎞️ Media Mode:**",
+        "  Videos are streamed directly inside Telegram with player controls, photos display full-width.",
+        "• **📄 Document Mode:**",
+        "  Files are sent as uncompressed documents, preserving 100% original quality and codecs.",
+        "",
+        "👇 *Neeche diye interactive buttons se format switch karein:*",
+    ])
 
 
 def thumbnail_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "🖼 **Thumbnail Setting**\n\n"
-        f"Current thumbnail: **{_exists_text(s.get('thumbnail_file_id'))}**\n"
-        f"Thumbnail status: **{'Enabled ✅' if s.get('thumbnail_enabled') else 'Disabled ❌'}**\n\n"
-        "Send a photo to save it as custom thumbnail.\n"
-        "Timeout: 60 sec"
-    )
+    thumb_id = s.get("thumbnail_file_id")
+    enabled = bool(s.get("thumbnail_enabled"))
+    status = "🟢 **Active & Enabled**" if (enabled and thumb_id) else ("🟡 **Saved (Disabled)**" if thumb_id else "⚪ **Not Set (Original)**")
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  🖼️  **CUSTOM THUMBNAIL SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Status:** {status}",
+        f"📁 **Saved Photo:** {'Uploaded Photo ✅' if thumb_id else 'None (Uses Original) ❌'}",
+        "",
+        "💡 **How it Works:**",
+        "• Saved thumbnail uploaded video aur document files par automatically apply hota hai.",
+        "• Best visual result ke liye **16:9** (landscape video) ya **1:1** (square) image use karein.",
+        "",
+        "👇 *Neeche diye interactive buttons se photo change ya toggle karein:*",
+    ])
 
 
 def caption_text(user_id: int):
@@ -446,133 +464,178 @@ def caption_text(user_id: int):
     storage_mode = str(s.get("storage_mode", "telegram") or "telegram").strip().lower()
     caption_state = get_caption_settings_for_mode(s, storage_mode)
     current = caption_state.get("text") or "None"
+    enabled = bool(caption_state.get("enabled") and caption_state.get("text"))
+    status = "🟢 **Active & Enabled**" if enabled else "⚪ **Disabled (Original Caption)**"
     padding = s.get("caption_index_padding", 2)
     start = s.get("caption_index_start", 1)
-    mode_note = "Telegram mode me ye sent caption banega."
-    if storage_mode == "gdrive":
-        mode_note = "Google Drive mode me ye file description ke roop me save hoga."
-    elif storage_mode == "rclone":
-        mode_note = "Rclone mode me ye `.caption.txt` sidecar file me save hoga."
 
-    return (
-        "📝 **Caption Setting**\n\n"
-        "Caption uploaded file ke niche custom text hota hai.\n\n"
-        "**Variables use kar sakte ho:**\n"
-        "{filename} - File name\n"
-        "{size} - File size\n"
-        "{duration} - Duration\n"
-        "{quality} - Quality\n"
-        "{language} - Language\n"
-        "{subtitle} - Subtitle\n"
-        "{index} - Auto index number\n\n"
-        "**{index} Example:**\n"
-        f"Current padding: **{padding}**\n"
-        f"Current start: **{start}**\n"
-        "Output example: `01`, `02`, `03`\n\n"
-        "**HTML formatting examples:**\n"
-        "<b>Bold</b>\n"
-        "<i>Italic</i>\n"
-        "<u>Underline</u>\n"
-        "<code>Monospace</code>\n"
-        "<a href='https://t.me/Code_Devil'>Link</a>\n\n"
-        f"Current Mode: **{storage_mode.title()}**\n"
-        f"Current Status: **{_yes_no_enabled(caption_state.get('enabled') and caption_state.get('text'))}**\n\n"
-        f"Current caption:\n`{current}`\n\n"
-        "Example caption:\n"
-        "`<b>{index}</b> | {filename}`\n\n"
-        f"{mode_note}\n\n"
-        "HTML tags use kar sakte ho. Timeout: 60 sec"
-    )
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  📝  **CUSTOM CAPTION SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Status:** {status}",
+        f"🎯 **Storage Engine:** `{storage_mode.title()}`",
+        "",
+        "📋 **Active Caption Template:**",
+        f"```\n{current}\n```",
+        "",
+        "✨ **Available Dynamic Variables:**",
+        "  • `{filename}` — Original file name",
+        "  • `{size}` — File size (e.g. 150 MB)",
+        "  • `{duration}` — Video runtime (e.g. 02:45:10)",
+        "  • `{quality}` — Video resolution (720p, 1080p, etc.)",
+        "  • `{language}` — Audio track language",
+        f"  • `{{index}}` — Sequential index (Padding: `{padding}`, Start: `{start}`)",
+        "",
+        "🎨 **Supported Formatting Tags:**",
+        "  `<b>Bold</b>`, `<i>Italic</i>`, `<u>Underline</u>`, `<code>Mono</code>`, `<a href='...'>Link</a>`",
+        "",
+        "👇 *Neeche diye interactive buttons se customize karein:*",
+    ])
 
 
 def prefix_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "🏷 **Prefix Setting**\n\n"
-        "Prefix filename ya caption ke starting me add hota hai.\n\n"
-        "Example:\n"
-        "Prefix = @Code_Devil\n\n"
-        "Output:\n"
-        "@Code_Devil Fast_And_Furious.mkv\n\n"
-        f"Current prefix: **{_safe_text(s.get('prefix'))}**\n\n"
-        "Send Prefix. Timeout: 60 sec"
-    )
+    prefix = str(s.get("prefix") or "").strip()
+    status = f"🟢 Set: `{prefix}`" if prefix else "⚪ Not Set"
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  🏷️  **FILENAME PREFIX SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Prefix:** {status}",
+        "",
+        "💡 **Preview:**",
+        f"  `Sample_Movie.mkv` ➔ `{prefix + ' ' if prefix else ''}Sample_Movie.mkv`",
+        "",
+        "👇 *Neeche diye buttons se prefix set ya remove karein:*",
+    ])
 
 
 def suffix_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "🔖 **Suffix Setting**\n\n"
-        "Suffix filename ya caption ke end me add hota hai.\n\n"
-        "Example:\n"
-        "Suffix = @Code_Devil\n\n"
-        "Output:\n"
-        "Fast_And_Furious @Code_Devil.mkv\n\n"
-        f"Current suffix: **{_safe_text(s.get('suffix'))}**\n\n"
-        "Send Suffix. Timeout: 60 sec"
-    )
+    suffix = str(s.get("suffix") or "").strip()
+    status = f"🟢 Set: `{suffix}`" if suffix else "⚪ Not Set"
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  🔖  **FILENAME SUFFIX SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Suffix:** {status}",
+        "",
+        "💡 **Preview:**",
+        f"  `Sample_Movie.mkv` ➔ `Sample_Movie{' ' + suffix if suffix else ''}.mkv`",
+        "",
+        "👇 *Neeche diye buttons se suffix set ya remove karein:*",
+    ])
 
 
 def auto_rename_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "✍️ **Auto Rename Setting**\n\n"
-        "Yahan tum filename ko advanced tareeke se control kar sakte ho.\n\n"
-        "**Simple Mode:**\n"
-        "auto_rename me jo text doge, bot usko filename me use karega.\n\n"
-        "**Advanced Variables:**\n"
-        "{filename} - Original filename\n"
-        "{index} - Auto index number\n\n"
-        "**Advanced Fields:**\n"
-        f"Rename Template: **{_safe_text(s.get('rename_template'))}**\n"
-        f"Filename Prefix: **{_safe_text(s.get('filename_prefix'))}**\n"
-        f"Filename Suffix: **{_safe_text(s.get('filename_suffix'))}**\n"
-        f"Filename Index Enabled: **{'Yes' if s.get('filename_index_enabled') else 'No'}**\n"
-        f"Filename Index Padding: **{s.get('filename_index_padding', 2)}**\n"
-        f"Filename Index Start: **{s.get('filename_index_start', 1)}**\n\n"
-        f"Current auto rename: **{_safe_text(s.get('auto_rename'))}**\n\n"
-        "Example rename template:\n"
-        "`Movie_{index}`\n"
-        "`{index}_{filename}`\n\n"
-        "Send Auto Rename value. Timeout: 60 sec"
-    )
+    enabled = bool(s.get("auto_rename_enabled"))
+    template = s.get("rename_template") or s.get("auto_rename") or ""
+    pref = s.get("filename_prefix") or ""
+    suff = s.get("filename_suffix") or ""
+    idx_on = bool(s.get("filename_index_enabled"))
+    padding = s.get("filename_index_padding", 2)
+    start = s.get("filename_index_start", 1)
+
+    status = "🟢 **Active & Enabled**" if (enabled and (template or pref or suff)) else "⚪ **Disabled (Original Filename)**"
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  ✍️  **AUTO RENAME & FILE TEMPLATES**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Status:** {status}",
+        f"🧩 **Rename Template:** `{template or 'None'}`",
+        f"🏷️ **Prefix:** `{pref or 'None'}` | 🔖 **Suffix:** `{suff or 'None'}`",
+        f"🔢 **Index Numbering:** {'🟢 ON' if idx_on else '⚪ OFF'} (Padding: `{padding}`, Start: `{start}`)",
+        "",
+        "💡 **Template Variables:**",
+        "  • `{filename}` — Original file name",
+        "  • `{index}` — Formatted index (e.g. 01, 02)",
+        "",
+        "📝 **Output Preview:**",
+        f"  `Original:` `sample_video_720p.mkv`",
+        f"  `Result:` `{f'{pref} ' if pref else ''}{template.replace('{filename}', 'sample_video_720p').replace('{index}', '01') if template else 'sample_video_720p'}{f' {suff}' if suff else ''}`",
+        "",
+        "👇 *Neeche diye buttons se rename configure karein:*",
+    ])
 
 
 def destination_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "📍 **Upload Destination Setting**\n\n"
-        "Yahan chat id ya channel/group id set kar sakte ho.\n\n"
-        "Example:\n"
-        "`-1001234567890`\n"
-        "`@yourchannelusername`\n\n"
-        f"Current destination: **{_safe_text(s.get('upload_destination'))}**\n\n"
-        "Send upload destination. Timeout: 60 sec"
-    )
+    dest = str(s.get("upload_destination") or "").strip()
+    topic = str(s.get("topic_id") or "").strip()
+    is_custom = bool(dest)
+    target_display = f"`{dest}`" if is_custom else "💬 **Your Private Chat (Direct Message)**"
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  🎯  **UPLOAD DESTINATION SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📍 **Current Delivery Target:** {target_display}",
+        f"🧵 **Forum Topic ID:** {f'`{topic}`' if topic else '⚪ General (None)'}",
+        "",
+        "💡 **Destination Options:**",
+        "• **Private Chat (Default):** Files aapke saath bot ki chat me direct aayengi.",
+        "• **Channel / Supergroup:** Public username (`@channel`) ya Chat ID (`-1001234567890`).",
+        "",
+        "⚠️ **Note:** Agar target channel/group hai, toh bot ko us channel me **Admin** banana zaroori hai.",
+        "",
+        "👇 *Neeche diye buttons se destination set ya reset karein:*",
+    ])
 
 
 def topic_id_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "🧵 **Topic ID Setting**\n\n"
-        "Agar supergroup topics use kar rahe ho to topic id yahan set kar sakte ho.\n\n"
-        f"Current topic id: **{_safe_text(s.get('topic_id'))}**\n\n"
-        "Send Topic ID. Timeout: 60 sec"
-    )
+    topic = str(s.get("topic_id") or "").strip()
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  🧵  **FORUM TOPIC ID SETTINGS**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Topic ID:** {f'`{topic}`' if topic else '⚪ General (No Topic)'}",
+        "",
+        "💡 **How to Find Topic ID:**",
+        "• Telegram Supergroup Forum me kisi topic ke message par right-click / tap karke **Copy Message Link** karein.",
+        "• Link me second last number Topic ID hota hai (`https://t.me/c/123456/TOPIC_ID/msg_id`).",
+        "",
+        "Send Topic ID number (Timeout: 60s).",
+    ])
 
 
 def replace_words_text(user_id: int):
     s = get_user_settings(user_id)
-    return (
-        "🔁 **Remove / Replace Words**\n\n"
-        "Format example:\n"
-        "old1:new1, old2:new2\n\n"
-        "Sirf remove karna ho to:\n"
-        "old1:, old2:\n\n"
-        f"Current replace words: **{_safe_text(s.get('replace_words'))}**\n\n"
-        "Ye filename aur caption dono cleaning me use ho sakta hai.\n"
-        "Send remove/replace rules. Timeout: 60 sec"
-    )
+    combined = s.get("replace_words") or ""
+    file_r = s.get("replace_words_file") or ""
+    cap_r = s.get("replace_words_caption") or ""
+    has_rules = bool(combined or file_r or cap_r)
+    status = "🟢 **Filter Active**" if has_rules else "⚪ **No Rules Configured**"
+
+    return "\n".join([
+        "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+        "  ✂️  **WORD REPLACE & REMOVE FILTER**",
+        "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+        "",
+        f"📊 **Current Status:** {status}",
+        f"🔄 **Combined Rules:** `{combined or 'None'}`",
+        f"📁 **File Only Rules:** `{file_r or 'None'}`",
+        f"📝 **Caption Only Rules:** `{cap_r or 'None'}`",
+        "",
+        "💡 **How to Write Rules:**",
+        "• Replace word: `old:new` (e.g. `@OldChannel:@NewChannel`)",
+        "• Remove word completely: `word:` (e.g. `Join @spam:`)",
+        "• Multiple rules: separate with comma (e.g. `@old:@new, spam:, promo:` )",
+        "",
+        "👇 *Neeche diye buttons se rules set ya clear karein:*",
+    ])
 
 
 def metadata_home_text(user_id: int):

@@ -411,7 +411,7 @@ def _task_last_seen_dt(task: dict):
     return None
 
 
-def _is_task_stale(task: dict) -> bool:
+def _is_task_stale(task: dict, max_age_minutes: int | None = None) -> bool:
     if not isinstance(task, dict):
         return False
     status = str(task.get("status", "") or "").strip().lower()
@@ -419,27 +419,38 @@ def _is_task_stale(task: dict) -> bool:
         return False
     last_seen = _task_last_seen_dt(task)
     if not last_seen:
-        return False
+        return True
+    timeout = max_age_minutes if max_age_minutes is not None else (10 if status in {"checking", "queued", "validating", "processing"} else 15)
     age = _now_utc() - last_seen
-    return age > timedelta(minutes=_TASK_STATUS_TTL)
+    return age > timedelta(minutes=timeout)
 
 
-def cleanup_stale_active_tasks():
+def cleanup_stale_active_tasks(on_startup: bool = False):
     tasks = get_all_tasks()
     changed = False
     for task_id, task in list(tasks.items()):
         if not isinstance(task, dict):
             continue
-        if _is_task_stale(task):
-            task = dict(task)
-            task["status"] = "failed"
-            task["current_stage"] = "failed"
-            task["error"] = task.get("error") or "Auto-closed stale task"
-            task["updated_at"] = _utcnow_naive_iso()
-            tasks[str(task_id)] = _normalize_task_record(task_id, task)
-            changed = True
+        status = str(task.get("status", "") or "").strip().lower()
+        if status in _ACTIVE_TASK_STATUSES:
+            if on_startup:
+                task = dict(task)
+                task["status"] = "cancelled"
+                task["current_stage"] = "cancelled"
+                task["error"] = "Interrupted by bot restart"
+                task["updated_at"] = _utcnow_naive_iso()
+                tasks[str(task_id)] = _normalize_task_record(task_id, task)
+                changed = True
+            elif _is_task_stale(task):
+                task = dict(task)
+                task["status"] = "failed"
+                task["current_stage"] = "failed"
+                task["error"] = task.get("error") or "Auto-closed stale task (timeout)"
+                task["updated_at"] = _utcnow_naive_iso()
+                tasks[str(task_id)] = _normalize_task_record(task_id, task)
+                changed = True
     if changed:
-        save_all_tasks(tasks)
+        save_all_tasks(tasks, force_local=True)
     return changed
 
 
@@ -2951,6 +2962,7 @@ def get_user_tasks(user_id: int, limit: int = 20):
 
 
 def count_running_tasks(user_id: int) -> int:
+    cleanup_stale_active_tasks()
     target_user_id = str(user_id)
     running = 0
     for task_id, task in get_all_tasks().items():
@@ -3216,7 +3228,7 @@ def initialize_storage():
     if _supabase_enabled() and not _SUPABASE_BOOTSTRAP_ATTEMPTED:
         threading.Thread(target=ensure_supabase_schema, kwargs={"force": False}, daemon=True, name="supabase-bootstrap").start()
     normalize_existing_tasks_inplace()
-    cleanup_stale_active_tasks()
+    cleanup_stale_active_tasks(on_startup=True)
     cleanup_runtime_artifacts()
     touch_last_activity()
     cleanup_expired_premium_users(force=True)

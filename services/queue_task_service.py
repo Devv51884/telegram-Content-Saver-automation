@@ -71,10 +71,13 @@ async def process_link_task_impl(client, user_id: int, message, link_text: str, 
     destination = get_configured_storage_destination(settings)
 
     if not destination:
-        if batch_mode:
+        if storage_mode == "telegram":
+            destination = str(user_id)
+        else:
+            if batch_mode:
+                return False
+            await ask_set_destination(message, settings=settings)
             return False
-        await ask_set_destination(message, settings=settings)
-        return False
 
     try:
         ensure_storage_runtime_ready(settings, ensure_shared_user_site_packages)
@@ -86,28 +89,45 @@ async def process_link_task_impl(client, user_id: int, message, link_text: str, 
 
     if info and str(info.get("link_type") or "").lower() in {"private", "private_topic"} and not has_user_session(user_id):
         if batch_mode:
+            task_id = make_task_id()
+            payload = _build_task_payload(
+                task_id=task_id,
+                user_id=user_id,
+                source=link_text.strip(),
+                destination=destination,
+                settings=settings,
+                storage_mode=storage_mode,
+                queue_position=1,
+                mode="batch",
+                pinned_ui=False,
+                batch_key=batch_key,
+                batch_index=batch_index,
+                batch_total=batch_total,
+            )
+            payload["status"] = "failed"
+            payload["current_stage"] = "failed"
+            payload["error"] = "Private link ke liye /login required hai"
+            touch_task(task_id, payload)
+            _register_task_to_batch_board(user_id, task_id, batch_key, batch_index, batch_total, link_text.strip())
             return False
         await ask_login_for_private_link(message)
         return False
 
-    cleanup_stale_active_tasks()
-    user_task_limit = get_user_task_limit(user_id)
-    running_now = count_running_tasks(user_id)
-    queue_now = TASK_QUEUE.qsize()
+    if not batch_mode:
+        cleanup_stale_active_tasks()
+        user_task_limit = get_user_task_limit(user_id)
+        running_now = count_running_tasks(user_id)
+        queue_now = TASK_QUEUE.qsize()
 
-    if running_now >= user_task_limit:
-        if batch_mode:
+        if running_now >= user_task_limit:
+            warn = f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain."
+            await edit_or_reply(message, warn)
             return False
-        warn = f"⚠️ Ek time par max {user_task_limit} running tasks allowed hain."
-        await edit_or_reply(message, warn)
-        return False
 
-    if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
-        if batch_mode:
+        if (running_now + queue_now) >= GLOBAL_MAX_RUNNING_TASKS:
+            warn = "⚠️ Queue full hai. Thodi der baad try karo."
+            await edit_or_reply(message, warn)
             return False
-        warn = "⚠️ Queue full hai. Thodi der baad try karo."
-        await edit_or_reply(message, warn)
-        return False
 
     await asyncio.sleep(0)
     task_id = make_task_id()

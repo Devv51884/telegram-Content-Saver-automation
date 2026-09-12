@@ -51,6 +51,7 @@ from keyboards import (
     thumbnail_buttons,
     caption_buttons,
     caption_index_buttons,
+    destination_buttons,
     simple_set_buttons,
     metadata_buttons,
     metadata_field_buttons,

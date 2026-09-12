@@ -39,16 +39,16 @@ async def handle_batch_task_callbacks(client, callback_query, user_id: int, data
     if data.startswith("batch_cancel_all:"):
         batch_key = data.split(":", 1)[1]
         cancelled_ids = _cancel_batch_tasks(user_id, batch_key, only_current=False, return_task_ids=True)
-        if cancelled_ids:
-            for task_id in cancelled_ids:
-                await update_task_status_message(client, task_id, done=True)
+        for task_id in cancelled_ids:
             try:
-                await _refresh_batch_board_message(client, user_id)
+                await update_task_status_message(client, task_id, done=True)
             except Exception:
                 pass
-            await callback_query.answer(f"Cancelled {len(cancelled_ids)} task(s)")
-        else:
-            await callback_query.answer("No active batch task", show_alert=True)
+        try:
+            await _refresh_batch_board_message(client, user_id, force_done=True)
+        except Exception:
+            pass
+        await callback_query.answer("🛑 Batch cancel kar diya gaya!", show_alert=False)
         return True
 
     if data == "clear_finished_tasks":

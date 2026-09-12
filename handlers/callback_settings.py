@@ -23,38 +23,56 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
         if new_mode not in {"media", "document"}:
             new_mode = "media"
         update_user_settings(user_id, {"upload_mode": new_mode, "telegram_upload_mode": new_mode})
-        text = settings_home_text(user_id)
-        kb = build_settings_home_markup(user_id)
+        text = build_upload_mode_message(user_id)
+        kb = upload_mode_buttons(new_mode)
 
     elif data == "show_thumbnail":
         text = thumbnail_text(user_id)
-        kb = thumbnail_buttons(s["thumbnail_enabled"])
+        kb = thumbnail_buttons(s.get("thumbnail_enabled", False), has_file=bool(s.get("thumbnail_file_id")))
 
     elif data == "toggle_thumbnail_enabled":
-        s["thumbnail_enabled"] = not s["thumbnail_enabled"]
+        s["thumbnail_enabled"] = not s.get("thumbnail_enabled", False)
         update_user_settings(user_id, s)
         text = thumbnail_text(user_id)
-        kb = thumbnail_buttons(s["thumbnail_enabled"])
+        kb = thumbnail_buttons(s["thumbnail_enabled"], has_file=bool(s.get("thumbnail_file_id")))
+
+    elif data == "view_thumbnail_photo":
+        thumb_id = s.get("thumbnail_file_id")
+        if thumb_id:
+            try:
+                await callback_query.message.reply_photo(
+                    photo=thumb_id,
+                    caption="🖼️ <b>Current Custom Thumbnail</b>",
+                )
+                await callback_query.answer("🖼️ Thumbnail bhej diya gaya!")
+            except Exception as e:
+                await callback_query.answer(f"❌ Thumbnail load nahi ho paya: {e}", show_alert=True)
+        else:
+            await callback_query.answer("⚠️ Koi custom thumbnail set nahi hai!", show_alert=True)
+        return True
 
     elif data == "set_thumbnail_photo":
         set_user_state(user_id, "set_thumbnail_photo")
-        await callback_query.message.reply_text("ðŸ–¼ Ab ek photo bhejo jise custom thumbnail save karna hai.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🖼️ Ab ek photo bhejo jise custom thumbnail save karna hai.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "remove_thumbnail":
         update_user_settings(user_id, {"thumbnail_file_id": "", "thumbnail_enabled": False})
         text = thumbnail_text(user_id)
-        kb = thumbnail_buttons(False)
+        kb = thumbnail_buttons(False, has_file=False)
 
     elif data == "show_caption":
         text = caption_text(user_id)
-        kb = caption_buttons(get_caption_settings_for_mode(s).get("enabled", False))
+        cap_state = get_caption_settings_for_mode(s)
+        kb = caption_buttons(cap_state.get("enabled", False), has_caption=bool(cap_state.get("text")))
 
     elif data == "toggle_caption_enabled":
         caption_state = get_caption_settings_for_mode(s)
         update_user_settings(user_id, {caption_state["enabled_key"]: not caption_state.get("enabled", False)})
+        s = get_user_settings(user_id)
         text = caption_text(user_id)
-        kb = caption_buttons(get_caption_settings_for_mode(get_user_settings(user_id)).get("enabled", False))
+        cap_state = get_caption_settings_for_mode(s)
+        kb = caption_buttons(cap_state.get("enabled", False), has_caption=bool(cap_state.get("text")))
 
     elif data == "show_caption_index_settings":
         text = caption_text(user_id)
@@ -79,14 +97,14 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
     elif data == "set_caption_text":
         set_user_state(user_id, "set_caption_text")
         current_mode = normalize_storage_mode(s.get("storage_mode", "telegram"))
-        await callback_query.message.reply_text(f"ðŸ“ Ab {current_mode} mode ke liye custom caption bhejo.\n{{index}} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text(f"ðŸ“  Ab {current_mode} mode ke liye custom caption bhejo.\n{{index}} use kar sakte ho.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "remove_caption":
         caption_state = get_caption_settings_for_mode(s)
         update_user_settings(user_id, {caption_state["text_key"]: "", caption_state["enabled_key"]: False})
         text = caption_text(user_id)
-        kb = caption_buttons(False)
+        kb = caption_buttons(False, has_caption=False)
 
     elif data == "show_prefix":
         text = prefix_text(user_id)
@@ -94,7 +112,7 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
 
     elif data == "set_prefix":
         set_user_state(user_id, "set_prefix")
-        await callback_query.message.reply_text("ðŸ· Ab prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🏷️ Ab prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "remove_prefix":
@@ -117,14 +135,16 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
         kb = simple_set_buttons("set_suffix", "remove_suffix")
 
     elif data == "show_auto_rename":
+        has_rename = bool(s.get("auto_rename") or s.get("rename_template") or s.get("filename_prefix") or s.get("filename_suffix"))
         text = auto_rename_text(user_id)
-        kb = auto_rename_buttons(s.get("auto_rename_enabled", False))
+        kb = auto_rename_buttons(s.get("auto_rename_enabled", False), has_rename=has_rename)
 
     elif data == "toggle_auto_rename_enabled":
         s["auto_rename_enabled"] = not s.get("auto_rename_enabled", False)
         update_user_settings(user_id, s)
+        has_rename = bool(s.get("auto_rename") or s.get("rename_template") or s.get("filename_prefix") or s.get("filename_suffix"))
         text = auto_rename_text(user_id)
-        kb = auto_rename_buttons(s.get("auto_rename_enabled", False))
+        kb = auto_rename_buttons(s["auto_rename_enabled"], has_rename=has_rename)
 
     elif data == "set_auto_rename":
         set_user_state(user_id, "set_auto_rename")
@@ -138,7 +158,7 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
         return True
     elif data == "set_filename_prefix":
         set_user_state(user_id, "set_filename_prefix")
-        await callback_query.message.reply_text("ðŸ· Ab filename prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("🏷️ Ab filename prefix bhejo.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data == "set_filename_suffix":
@@ -169,25 +189,26 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
     elif data == "remove_auto_rename":
         update_user_settings(user_id, {"auto_rename": "", "rename_template": "", "filename_prefix": "", "filename_suffix": "", "auto_rename_enabled": False, "filename_index_enabled": False})
         text = auto_rename_text(user_id)
-        kb = auto_rename_buttons(False)
+        kb = auto_rename_buttons(False, has_rename=False)
 
     elif data == "show_destination":
         text = destination_text(user_id)
-        kb = simple_set_buttons("set_destination", "remove_destination")
+        kb = destination_buttons(bool(s.get("upload_destination")), bool(s.get("topic_id")))
 
     elif data == "set_destination":
         set_user_state(user_id, "set_destination")
-        await callback_query.message.reply_text("ðŸ“ Ab upload destination bhejo.\nChat ID ya @channelusername format me.\n\n/cancel bhej kar cancel kar sakte ho.")
+        await callback_query.message.reply_text("📢 Ab upload destination bhejo.\nChat ID ya @channelusername format me.\n\n/cancel bhej kar cancel kar sakte ho.")
         await callback_query.answer()
         return True
     elif data in {"clear_destination", "remove_destination"}:
         update_user_settings(user_id, {"upload_destination": ""})
+        s = get_user_settings(user_id)
         text = destination_text(user_id)
-        kb = simple_set_buttons("set_destination", "remove_destination")
+        kb = destination_buttons(bool(s.get("upload_destination")), bool(s.get("topic_id")))
 
     elif data == "show_topic_id":
         text = topic_id_text(user_id)
-        kb = simple_set_buttons("set_topic_id", "remove_topic_id")
+        kb = destination_buttons(bool(s.get("upload_destination")), bool(s.get("topic_id")))
 
     elif data == "set_topic_id":
         set_user_state(user_id, "set_topic_id")
@@ -196,8 +217,9 @@ async def handle_settings_callbacks(client, callback_query, user_id: int, data: 
         return True
     elif data in {"clear_topic_id", "remove_topic_id"}:
         update_user_settings(user_id, {"topic_id": ""})
+        s = get_user_settings(user_id)
         text = topic_id_text(user_id)
-        kb = simple_set_buttons("set_topic_id", "remove_topic_id")
+        kb = destination_buttons(bool(s.get("upload_destination")), bool(s.get("topic_id")))
 
     elif data == "show_replace_words":
         text = replace_words_text(user_id)

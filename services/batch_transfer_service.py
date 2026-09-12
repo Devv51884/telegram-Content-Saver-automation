@@ -101,13 +101,17 @@ async def process_batch_links_impl(client, user_id: int, message, raw_text: str,
             continue
 
         current_settings = get_user_settings(user_id)
+        current_storage_mode = normalize_storage_mode(current_settings.get("storage_mode", "telegram"))
+        item_dest = get_configured_storage_destination(current_settings)
+        if not item_dest and current_storage_mode == "telegram":
+            item_dest = str(user_id)
         item = {
             "task_id": task_id,
             "user_id": user_id,
             "message": message,
             "link_text": link,
             "settings": current_settings,
-            "destination": get_configured_storage_destination(current_settings),
+            "destination": item_dest,
             "batch_mode": True,
         }
 

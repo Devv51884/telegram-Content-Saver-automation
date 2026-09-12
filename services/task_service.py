@@ -4,8 +4,15 @@ from runtime_context import *
 
 def ensure_task_not_cancelled(task_id: str):
     task = get_task(task_id) or {}
-    if task.get("status") == "cancelled":
+    if str(task.get("status", "")).strip().lower() == "cancelled":
         raise RuntimeError("Task cancelled by user")
+    user_id = int(task.get("user_id") or 0)
+    batch_key = str(task.get("batch_key") or "").strip()
+    if user_id and batch_key:
+        board = _get_batch_board(user_id)
+        if board and board.get("batch_key") == batch_key and bool(board.get("cancel_all_requested")):
+            touch_task(task_id, {"status": "cancelled", "current_stage": "cancelled", "error": "Batch cancelled by user", "is_visible": True})
+            raise RuntimeError("Task cancelled by user")
 
 
 def touch_task(task_id: str, payload: dict):
@@ -354,16 +361,21 @@ def _cancel_batch_tasks(user_id: int, batch_key: str, only_current: bool = False
     board = _get_batch_board(user_id)
     task_ids = []
     if board and board.get("batch_key") == batch_key:
-        board["status"] = "Cancelling" if not only_current else str(board.get("status") or "Running")
-        if not only_current:
-            board["cancel_all_requested"] = True
+        current_task_id = str(board.get("current_task_id") or "").strip()
         if only_current:
-            current_task_id = str(board.get("current_task_id") or "").strip()
+            board["status"] = "Running"
             if current_task_id:
                 task_ids.append(current_task_id)
         else:
+            board["status"] = "Cancelled"
+            board["current_stage"] = "Cancelled"
+            board["cancel_all_requested"] = True
+            board["note"] = "Batch cancelled by user"
+            board["done"] = True
+            if current_task_id:
+                task_ids.append(current_task_id)
             tasks = board.get("tasks", {}) if isinstance(board.get("tasks", {}), dict) else {}
-            task_ids.extend(str(task_id) for task_id in tasks.keys())
+            task_ids.extend(str(tid) for tid in tasks.keys())
     else:
         for task in get_user_tasks(user_id, limit=2000):
             if str(task.get("batch_key") or "").strip() == batch_key:
@@ -376,7 +388,7 @@ def _cancel_batch_tasks(user_id: int, batch_key: str, only_current: bool = False
         if not task_id or task_id in seen:
             continue
         seen.add(task_id)
-        if _cancel_task_record(task_id):
+        if _cancel_task_record(task_id, reason="Batch cancelled by user" if not only_current else "Current task cancelled"):
             cancelled_ids.append(task_id)
 
     if board and board.get("batch_key") == batch_key:
@@ -385,11 +397,17 @@ def _cancel_batch_tasks(user_id: int, batch_key: str, only_current: bool = False
             row = dict(tasks.get(task_id) or {})
             row["status"] = "cancelled"
             tasks[task_id] = row
-        if only_current and cancelled_ids:
-            board["current_stage"] = "Cancelled"
-        if not only_current and cancelled_ids:
-            board["note"] = "Batch cancelled by user"
         board["tasks"] = tasks
+        if only_current:
+            board["current_stage"] = "Cancelled"
+            board["current_task_id"] = ""
+        else:
+            board["cancel_all_requested"] = True
+            board["status"] = "Cancelled"
+            board["current_stage"] = "Cancelled"
+            board["note"] = "Batch cancelled by user"
+            board["done"] = True
+            board["current_task_id"] = ""
         _save_batch_board(user_id, board)
 
     return cancelled_ids if return_task_ids else len(cancelled_ids)
